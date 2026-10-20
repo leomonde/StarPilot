@@ -1156,6 +1156,12 @@ class SafetyTest(SafetyTestBase):
             if current_test.startswith('TestSubaruDPlatform') and attr.startswith('TestRivian'):
               tx = list(filter(lambda m: not (m[1] == 2 and m[0] in [0x321, 0x322, 0x323]), tx))
 
+            # Volvo EUCD's camera-bus brake-ack relay (0x323) intentionally shares this
+            # address/bus pair with Subaru D-platform's bus-2 HUD messages.
+            if ((attr.startswith('TestSubaruDPlatform') and current_test == 'TestVolvoEUCD') or
+                (current_test.startswith('TestSubaruDPlatform') and attr == 'TestVolvoEUCD')):
+              tx = list(filter(lambda m: not (m[1] == 2 and m[0] == 0x323), tx))
+
             if attr.startswith('TestHyundaiLongitudinal') or attr in ('TestHyundaiSafetyFCEVLong',
                                                                       'TestHyundaiLongitudinalAolLkasOnEngageSafety',
                                                                       'TestHyundaiLongitudinalAolMainLkasOnEngageSafety',

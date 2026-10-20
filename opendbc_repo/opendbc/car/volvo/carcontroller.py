@@ -3,24 +3,64 @@ from collections import deque
 import numpy as np
 
 from opendbc.can.packer import CANPacker
-from opendbc.car import Bus
+from opendbc.car import Bus, DT_CTRL, structs
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.lateral import apply_std_steer_angle_limits
 from opendbc.car.volvo.helpers import LCA3CounterSync
 from opendbc.car.volvo.volvocan import (create_c1_cancel, create_c1_pscm_message, create_c1_steering_control, create_lca_message,
                                         create_pscm_message, create_lca_3_message, create_lca_2_message, create_lca_4_message, create_lca_5_message,
-                                        create_lca_6_message, create_lca_7_message, create_pscm_related_message)
-from opendbc.car.volvo.values import CAR, CarControllerParams, VolvoC1PlatformConfig
+                                        create_lca_6_message, create_lca_7_message, create_pscm_related_message,
+                                        create_eucd_button_msg, create_eucd_lka_msg, create_eucd_lkas_state_msg, create_eucd_longitudinal,
+                                        create_eucd_fsm0, create_eucd_fsm4, create_eucd_radar, create_eucd_cam_brake_level,
+                                        create_eucd_cam_brake_status, create_eucd_cam_wheel_status, create_eucd_cam_brake_request_ack,
+                                        eucd_next_long_mode)
+from opendbc.car.volvo.values import CAR, CarControllerParams, LongMode, SteerDirection, VolvoC1PlatformConfig, VolvoEUCDPlatformConfig
+
+LongCtrlState = structs.CarControl.Actuators.LongControlState
 
 
 class CarController(CarControllerBase):
   def __init__(self, dbc_names, CP):
     super().__init__(dbc_names, CP)
     self.is_c1 = isinstance(CAR(CP.carFingerprint).config, VolvoC1PlatformConfig)
-    self.packer = CANPacker(dbc_names[Bus.pt] if self.is_c1 else dbc_names[Bus.party])
+    self.is_eucd = isinstance(CAR(CP.carFingerprint).config, VolvoEUCDPlatformConfig)
+    self.packer = CANPacker(dbc_names[Bus.pt] if (self.is_c1 or self.is_eucd) else dbc_names[Bus.party])
     self.apply_angle_last = 0.0  # Track last applied steering angle
     self.c1_torque_samples = deque(maxlen=CarControllerParams.C1_N_ZERO_TORQUE)
     self.c1_recovery_until = -1
+
+    # EUCD (V60) state
+    self.eucd_apply_steer_prev = 0
+    self.eucd_apply_steer_dir_prev = SteerDirection.NONE
+    self.eucd_latActive_prev = False
+    self.eucd_steer_blocked = False
+    self.eucd_steer_blocked_cnt = 0
+    self.eucd_steer_dir_bf_block = SteerDirection.NONE
+    self.eucd_last_resume_frame = 0
+    self.eucd_distance = 0
+    self.eucd_waiting = False
+    self.eucd_sng_count = 0
+    self.eucd_op_resume_frames = 0
+    self.eucd_sng_ack_frames = 0
+    self.eucd_next_long_tx_nanos = 0
+    self.EUCD_LONG_TX_PERIOD_NANOS = 20_000_000
+    self.eucd_long_mode = LongMode.COAST
+    self.eucd_accel = 0.0
+    self.eucd_cam_brake = False
+    self.eucd_cam_brake_honor = False
+    self.eucd_cam_stop = False
+    self.eucd_cam_stop_w = 0.
+    self.eucd_cam_relay = False
+    self.eucd_cam_weight = 0.
+    self.eucd_spoof_cam_ack = False
+    self.eucd_cam_brake_target = 0
+    self.eucd_cam_mask_frames = 0
+    self.eucd_brake_level_133 = 0
+    self.eucd_op_owns_acc = False
+    self.eucd_cam_was_enabled = False
+    self.eucd_fsm0_good = None
+    self.eucd_fsm3_good = {}
+    self.eucd_fsm4_good_byte2 = None
 
     self.gear_acc = 60
     self.lca_4_acc = 0  # Bresenham accumulator for 29 Hz
@@ -70,6 +110,8 @@ class CarController(CarControllerBase):
   def update(self, CC, CS, now_nanos, starpilot_toggles):
     if self.is_c1:
       return self._update_c1(CC, CS)
+    if self.is_eucd:
+      return self._update_eucd(CC, CS, now_nanos)
 
     can_sends = []
     actuators = CC.actuators
@@ -292,6 +334,260 @@ class CarController(CarControllerBase):
     self.frame += 1
     self.last_lat_active = CC.latActive
     return new_actuators, can_sends
+
+  # ---- V60/EUCD ----
+  # Adapted from the sunnypilot volvo_oplong port (FSM0-4, PSCM1, lateral + longitudinal).
+
+  def _update_eucd(self, CC, CS, now_nanos):
+    actuators = CC.actuators
+    can_sends = []
+
+    if CC.cruiseControl.cancel and CS.out.vEgo > self.CP.minSteerSpeed and not CS.out.brakePressed:
+      can_sends.append(create_eucd_button_msg(self.packer, cancel=True))
+
+    if self.frame % 2 == 0:
+      can_sends += self._eucd_lateral(CC, CS)
+
+    self._eucd_resume_buttons(CC, CS, can_sends)
+    good_fsm3 = self._eucd_relay_fsm0(CC, CS, can_sends, CS.eucd_ecm_acc_engaged)
+
+    if now_nanos >= self.eucd_next_long_tx_nanos:
+      next_tx = self.eucd_next_long_tx_nanos + self.EUCD_LONG_TX_PERIOD_NANOS
+      if self.eucd_next_long_tx_nanos == 0 or next_tx <= now_nanos:
+        next_tx = now_nanos + self.EUCD_LONG_TX_PERIOD_NANOS
+      self.eucd_next_long_tx_nanos = next_tx
+      can_sends += self._eucd_longitudinal(CC, CS, good_fsm3)
+
+    can_sends += self._eucd_relay_fsm4(CC, CS)
+    can_sends += self._eucd_relay_brake_acks(CC, CS)
+
+    new_actuators = actuators.as_builder()
+    new_actuators.steeringAngleDeg = self.eucd_apply_steer_prev
+    if CC.longActive:
+      new_actuators.accel = self.eucd_accel
+
+    self.frame += 1
+    return new_actuators, can_sends
+
+  def _eucd_lateral(self, CC, CS):
+    """Steering angle request (FSM2) and servo state to the camera (PSCM1), at 50 Hz."""
+    CCP = CarControllerParams
+    actuators = CC.actuators
+    if CC.latActive and CS.out.vEgo > self.CP.minSteerSpeed:
+      apply_steer = apply_std_steer_angle_limits(
+        actuators.steeringAngleDeg, self.eucd_apply_steer_prev, CS.out.vEgoRaw,
+        CS.out.steeringAngleDeg, CC.latActive, CCP.EUCD_ANGLE_LIMITS
+      )
+      apply_steer_dir = SteerDirection.LEFT if apply_steer > 0 else SteerDirection.RIGHT
+
+      error = CS.out.steeringAngleDeg - apply_steer
+      error_with_deadzone = 0 if abs(error) < CCP.EUCD_DEADZONE else error
+
+      if not self.eucd_latActive_prev:
+        self.eucd_apply_steer_dir_prev = apply_steer_dir
+
+      # block direction flips until the servo catches up
+      if self.eucd_steer_blocked:
+        if (apply_steer_dir == self.eucd_steer_dir_bf_block) or (self.eucd_steer_blocked_cnt <= 0) or (error_with_deadzone == 0):
+          self.eucd_steer_blocked = False
+      else:
+        if apply_steer_dir != self.eucd_apply_steer_dir_prev and error_with_deadzone != 0:
+          self.eucd_steer_blocked = True
+          self.eucd_steer_blocked_cnt = CCP.EUCD_BLOCK_LEN
+          self.eucd_steer_dir_bf_block = self.eucd_apply_steer_dir_prev
+
+      if self.eucd_steer_blocked:
+        self.eucd_steer_blocked_cnt -= 1
+        apply_steer_dir = SteerDirection.NONE
+      elif error_with_deadzone == 0:
+        apply_steer_dir = self.eucd_apply_steer_dir_prev
+    else:
+      apply_steer = 0
+      apply_steer_dir = SteerDirection.NONE
+
+    self.eucd_apply_steer_prev = apply_steer
+    self.eucd_apply_steer_dir_prev = apply_steer_dir
+    self.eucd_latActive_prev = CC.latActive
+
+    return [
+      create_eucd_lka_msg(self.packer, apply_steer, int(apply_steer_dir)),
+      # servo state to the camera, so the servo keeps accepting commands
+      create_eucd_lkas_state_msg(self.packer, CS.out.steeringAngleDeg, CS.eucd_pscm_stock_values),
+    ]
+
+  def _eucd_resume_buttons(self, CC, CS, can_sends):
+    """Resume burst when the lead moves away (camera FSM1 distance or openpilot's resume request)."""
+    CCP = CarControllerParams
+    at_standstill = CS.out.cruiseState.enabled and CS.out.cruiseState.standstill and CS.out.vEgo < 0.01
+
+    self.eucd_op_resume_frames = self.eucd_op_resume_frames + 1 if CC.cruiseControl.resume else 0
+    op_resume = self.eucd_op_resume_frames * DT_CTRL >= CCP.EUCD_SNG_OP_RESUME_TIME
+
+    if (self.frame - self.eucd_last_resume_frame) * DT_CTRL > 1.00:
+      if at_standstill and not self.eucd_waiting:
+        self.eucd_distance = CS.eucd_acc_distance
+        self.eucd_waiting = True
+        self.eucd_sng_count = 0
+      if at_standstill and self.eucd_waiting and (CS.eucd_acc_distance > self.eucd_distance or op_resume):
+        can_sends.extend(self._eucd_resume_burst())
+        if self.eucd_sng_count == 0:
+          self.eucd_sng_ack_frames = 25
+        self.eucd_sng_count += 1
+      if self.eucd_waiting and (self.eucd_sng_count >= 5 or not CS.out.cruiseState.standstill):
+        self.eucd_waiting = False
+        self.eucd_last_resume_frame = self.frame
+
+  def _eucd_resume_burst(self):
+    return [create_eucd_button_msg(self.packer, resume=True)] * CarControllerParams.EUCD_BUTTON_BURST
+
+  def _eucd_relay_fsm0(self, CC, CS, can_sends, ecm_engaged):
+    """FSM0 relayed 1:1; the camera's last good frame while OP owns ACC. Returns the FSM3 frame to hold, if any."""
+    CCP = CarControllerParams
+    if not ecm_engaged:
+      self.eucd_cam_was_enabled = False
+    for stock_fsm0 in CS.eucd_stock_FSM0_frames:
+      cam_ok = bool(int(stock_fsm0["Byte_2"]) & 0x04) and int(stock_fsm0["Byte_3"]) == 0
+      if cam_ok:
+        self.eucd_fsm0_good = stock_fsm0
+        self.eucd_cam_was_enabled = self.eucd_cam_was_enabled or ecm_engaged
+      takeover = CCP.EUCD_OP_OWNS_ACC_AFTER_CAMERA_ABORT and self.CP.openpilotLongitudinalControl and self.eucd_cam_was_enabled
+      self.eucd_op_owns_acc = CC.enabled and ecm_engaged and not cam_ok and self.eucd_fsm0_good is not None and takeover
+      can_sends.append(create_eucd_fsm0(self.packer, stock_fsm0, ecm_engaged, self.eucd_fsm0_good if self.eucd_op_owns_acc else None))
+    if not (ecm_engaged and CC.enabled):
+      self.eucd_op_owns_acc = False
+
+    fsm3_kind = int(CS.eucd_stock_FSM3["Byte_4"]) == 0x81
+    if not self.eucd_op_owns_acc:
+      if int(CS.eucd_stock_FSM3["Byte_6"]) == 0 and (int(CS.eucd_stock_FSM3["Byte_2"]) & 0xFC) not in (0xFC, 0xDC):
+        self.eucd_fsm3_good[fsm3_kind] = CS.eucd_stock_FSM3
+    return self.eucd_fsm3_good.get(fsm3_kind) if self.eucd_op_owns_acc else None
+
+  def _eucd_relay_fsm4(self, CC, CS):
+    """FSM4 relayed 1:1; with OP long, OP sets the brake flag and target."""
+    sends = []
+    fsm4_mode = self.eucd_long_mode if (CC.longActive and not self.eucd_cam_relay) else None
+    for stock_fsm4 in CS.eucd_stock_FSM4_frames:
+      self.eucd_cam_brake = bool(int(stock_fsm4["Byte_5"]) & 0x40)
+      if not self.eucd_op_owns_acc and int(stock_fsm4["Byte_2"]) != 0xFC:
+        self.eucd_fsm4_good_byte2 = int(stock_fsm4["Byte_2"])
+      good_byte2 = self.eucd_fsm4_good_byte2 if self.eucd_op_owns_acc else None
+      sends.append(create_eucd_fsm4(self.packer, stock_fsm4, self.eucd_accel, fsm4_mode, good_byte2, cam_weight=self.eucd_cam_weight))
+    return sends
+
+  def _eucd_longitudinal(self, CC, CS, good_fsm3):
+    """Accel and mode decision, FSM1/FSM3 sent at 50 Hz."""
+    if CS.eucd_stock_FSM4_frames:
+      self.eucd_cam_brake = bool(int(CS.eucd_stock_FSM4_frames[-1]["Byte_5"]) & 0x40)
+    if CC.longActive:
+      accel, long_mode = self._eucd_long_decision(CC, CS)
+    else:
+      accel = float(CS.eucd_stock_FSM3["ACC_AccelerationRequest"])
+      self.eucd_long_mode = LongMode.COAST
+      self.eucd_cam_brake_honor = False
+      self._eucd_update_cam_stop(CC, CS)
+      self.eucd_cam_relay = False
+      self.eucd_cam_weight = 0.
+      long_mode = None
+    self.eucd_accel = accel
+
+    self.eucd_spoof_cam_ack = (CC.longActive and not self.eucd_cam_relay and self.eucd_cam_brake and not self.eucd_cam_brake_honor and
+                               self.eucd_long_mode != LongMode.BRAKE)
+
+    if self.eucd_sng_ack_frames > 0:
+      acc_check = 1
+      self.eucd_sng_ack_frames -= 1
+    else:
+      acc_check = int(CS.eucd_stock_FSM3["ACC_Check"])
+
+    return [
+      create_eucd_radar(self.packer, CS.eucd_stock_FSM1),
+      create_eucd_longitudinal(self.packer, CS.eucd_stock_FSM3, accel, acc_check, long_mode, good_fsm3),
+    ]
+
+  def _eucd_long_decision(self, CC, CS):
+    """OP long active: accel and mode from OP, the camera's brake request, or the camera's final stop."""
+    CCP = CarControllerParams
+    actuators = CC.actuators
+    accel = min(max(actuators.accel, CCP.EUCD_ACCEL_MIN), CCP.EUCD_ACCEL_MAX)
+    cam_accel = float(CS.eucd_stock_FSM3["ACC_AccelerationRequest"])
+
+    self._eucd_update_cam_stop(CC, CS)
+    op_brakes_more = (actuators.longControlState == LongCtrlState.pid and
+                      ((not self.eucd_cam_brake and cam_accel >= 0. and accel < CCP.EUCD_OP_BRAKE_OVERRIDE_ACCEL) or
+                       accel < cam_accel - CCP.EUCD_OP_BRAKE_OVERRIDE_MARGIN))
+    w = 0. if op_brakes_more else self.eucd_cam_stop_w
+    self.eucd_cam_relay = w >= 1.
+    self.eucd_cam_weight = w
+
+    if self.eucd_cam_relay:
+      cam_mode = int(CS.eucd_stock_FSM3["Byte_2"]) & 0x3
+      self.eucd_long_mode = LongMode(cam_mode) if cam_mode <= LongMode.DRIVE else LongMode.COAST
+      self.eucd_cam_brake_honor = self.eucd_cam_brake
+      return cam_accel, None
+
+    if w > 0.:
+      accel = accel + w * (cam_accel - accel)
+      self.eucd_long_mode = LongMode.BRAKE if self.eucd_cam_brake else eucd_next_long_mode(self.eucd_long_mode, accel)
+      self.eucd_cam_brake_honor = self.eucd_cam_brake
+      return accel, self.eucd_long_mode
+
+    if not self.eucd_cam_brake:
+      self.eucd_cam_brake_honor = False
+    elif not self.eucd_cam_brake_honor:
+      self.eucd_cam_brake_honor = not CCP.EUCD_OP_IGNORES_MILD_CAMERA_BRAKE or cam_accel < CCP.EUCD_CAMERA_BRAKE_HONOR_BELOW
+    if self.eucd_cam_brake_honor:
+      accel = min(accel, cam_accel)
+      self.eucd_long_mode = LongMode.BRAKE
+    else:
+      self.eucd_long_mode = eucd_next_long_mode(self.eucd_long_mode, accel)
+    return accel, self.eucd_long_mode
+
+  def _eucd_update_cam_stop(self, CC, CS):
+    """Camera final stop behind a lead: state and blend weight, at 50 Hz."""
+    CCP = CarControllerParams
+    lead = CS.eucd_acc_distance < 255
+    v = CS.out.vEgo
+    if not (CCP.EUCD_CAMERA_STOPS_BEHIND_LEAD and CC.longActive):
+      self.eucd_cam_stop = False
+      if not CC.longActive:
+        self.eucd_cam_stop_w = 0.
+    elif not self.eucd_cam_stop and lead and v < CCP.EUCD_CAM_STOP_HANDOVER_SPEED:
+      self.eucd_cam_stop = True
+    elif self.eucd_cam_stop and (v > CCP.EUCD_CAM_STOP_RETURN_SPEED or (not lead and v > 1.)):
+      self.eucd_cam_stop = False
+    step = (self.EUCD_LONG_TX_PERIOD_NANOS * 1e-9) / CCP.EUCD_CAM_STOP_TRANSITION_TIME
+    self.eucd_cam_stop_w = min(max(self.eucd_cam_stop_w + (step if self.eucd_cam_stop else -step), 0.), 1.)
+
+  def _eucd_relay_brake_acks(self, CC, CS):
+    """Brake acks to the camera: masked while OP brakes alone, spoofed while OP ignores the camera's request."""
+    CCP = CarControllerParams
+    if self.eucd_cam_brake:
+      self.eucd_cam_mask_frames = 0
+    elif CC.longActive and self.eucd_long_mode == LongMode.BRAKE and not self.eucd_cam_relay:
+      self.eucd_cam_mask_frames = CCP.EUCD_CAM_BRAKE_MASK_HOLD_FRAMES
+    elif self.eucd_cam_mask_frames > 0:
+      self.eucd_cam_mask_frames -= 1
+    mask = self.eucd_cam_mask_frames > 0
+    masked = CCP.EUCD_CAM_BRAKE_MASK_MSGS
+    mask_133, mask_323, mask_220, mask_299 = (mask and addr in masked for addr in (0x133, 0x323, 0x220, 0x299))
+    spoof_220, spoof_299 = (self.eucd_spoof_cam_ack and addr in masked for addr in (0x220, 0x299))
+    if CS.eucd_stock_FSM4_frames:
+      last_fsm4 = CS.eucd_stock_FSM4_frames[-1]
+      self.eucd_cam_brake_target = ((int(last_fsm4["Byte_5"]) << 8) | int(last_fsm4["Byte_6"])) & 0x3FFF
+    spoof_299 = spoof_299 and self.eucd_cam_brake_target < CCP.EUCD_CAM_ACK_RELEASE_VALUE
+
+    sends = []
+    for stock_133 in CS.eucd_stock_133_frames:
+      if not mask_133:
+        self.eucd_brake_level_133 = int(stock_133["Byte_1"]) & 0x7F
+      sends.append(create_eucd_cam_brake_level(self.packer, stock_133, self.eucd_brake_level_133 if mask_133 else None))
+    for stock_323 in CS.eucd_stock_323_frames:
+      sends.append(create_eucd_cam_brake_status(self.packer, stock_323, mask_323))
+    for stock_220 in CS.eucd_stock_220_frames:
+      sends.append(create_eucd_cam_wheel_status(self.packer, stock_220, mask_220, spoof_220))
+    for stock_299 in CS.eucd_stock_299_frames:
+      sends.append(create_eucd_cam_brake_request_ack(self.packer, stock_299, mask_299, spoof_299))
+    return sends
 
   def _update_c1(self, CC, CS):
     can_sends = []

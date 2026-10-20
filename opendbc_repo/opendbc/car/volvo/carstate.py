@@ -1,9 +1,11 @@
+import copy
+
 from cereal import custom
 from opendbc.car import Bus, ButtonType, create_button_events, structs
 from opendbc.can.parser import CANParser
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.interfaces import CarStateBase
-from opendbc.car.volvo.values import CAR, DBC, VolvoC1PlatformConfig, VolvoSPAPlatformConfig
+from opendbc.car.volvo.values import CAR, CANBUS, CarControllerParams, DBC, EcmAccState, VolvoC1PlatformConfig, VolvoEUCDPlatformConfig, VolvoSPAPlatformConfig
 
 GearShifter = structs.CarState.GearShifter
 TransmissionType = structs.CarParams.TransmissionType
@@ -14,11 +16,17 @@ SPEED_TO_MS = 0.003977
 STEERING_PRESSED_THRESHOLD = 2
 
 
+def eucd_all_frames(cp: CANParser, name: str) -> list[dict[str, float]]:
+  sigs = cp.vl_all[name]
+  return [dict(zip(sigs.keys(), vals, strict=True)) for vals in zip(*sigs.values(), strict=True)]
+
+
 class CarState(CarStateBase):
   def __init__(self, CP, FPCP):
     super().__init__(CP, FPCP)
     self.is_c1 = isinstance(CAR(CP.carFingerprint).config, VolvoC1PlatformConfig)
     self.is_spa = isinstance(CAR(CP.carFingerprint).config, VolvoSPAPlatformConfig)
+    self.is_eucd = isinstance(CAR(CP.carFingerprint).config, VolvoEUCDPlatformConfig)
     self.gas_pressed_prev = False
     self.dispatch_lca_2_msg = False
     self.msg_pscm = {}
@@ -47,10 +55,18 @@ class CarState(CarStateBase):
       "TimeGapIncreaseBtn": False,
       "TimeGapDecreaseBtn": False,
     }
+    # EUCD (V60) state
+    self.eucd_cruise_enabled_prev = False
+    self.eucd_eps_torque_timer = 0
+    self._eucd_cruise_speed_prev_kph = 0
+    self._eucd_pending_delta = 0
+    self._eucd_custom_acc_step = 1
 
   def update(self, can_parsers, starpilot_toggles) -> structs.CarState:
     if self.is_c1:
       return self._update_c1(can_parsers)
+    if self.is_eucd:
+      return self._update_eucd(can_parsers)
 
     cp_main = can_parsers[Bus.main]
     cp_pt = can_parsers[Bus.pt]
@@ -211,6 +227,109 @@ class CarState(CarStateBase):
     fp_ret = custom.StarPilotCarState.new_message()
     return ret, fp_ret
 
+  def _update_eucd(self, can_parsers):
+    pt_cp = can_parsers[Bus.pt]
+    cam_cp = can_parsers[Bus.cam]
+
+    ret = structs.CarState()
+
+    # car speed
+    ret.vEgoRaw = pt_cp.vl["VehicleSpeed1"]["VehicleSpeed"] * CV.KPH_TO_MS
+    ret.vEgo, ret.aEgo = self.update_speed_kf(ret.vEgoRaw)
+    ret.standstill = ret.vEgoRaw < 0.1
+
+    # gas pedal
+    ret.gasPressed = pt_cp.vl["AccPedal"]["AccPedal"] >= 10
+
+    # brake pedal
+    ret.brakePressed = pt_cp.vl["Brake_Info"]["BrakePedal"] == 2
+
+    # steering
+    ret.steeringAngleDeg = pt_cp.vl["PSCM1"]["SteeringAngleServo"]
+    ret.steeringRateDeg = pt_cp.vl["SAS0"]["SteeringRateOfChange"]
+    eucd_steering_direction = pt_cp.vl["SAS0"]["SteeringDirection"]
+    ret.steeringTorque = pt_cp.vl["PSCM1"]["EPSTorque"]
+    if eucd_steering_direction:
+      ret.steeringTorque = -abs(ret.steeringTorque)
+    ret.steeringTorqueEps = pt_cp.vl["PSCM1"]["LKATorque"]
+    ret.steeringPressed = abs(ret.steeringTorque) > 50
+
+    # cruise state
+    ret.cruiseState.speed = pt_cp.vl["ACC_Speed"]["ACC_Speed"] * CV.KPH_TO_MS
+    ret.cruiseState.speedCluster = ret.cruiseState.speed
+    ret.cruiseState.available = bool(cam_cp.vl["FSM0"]["ACC_Available"])
+    # the ECM is the ACC master
+    self.eucd_ecm_acc_engaged = int(pt_cp.vl["EngineData"]["ACC_State_ECM"]) == EcmAccState.ENGAGED
+    ret.cruiseState.enabled = self.eucd_ecm_acc_engaged
+    # camera standstill hold (also set in its fault state, so gated by the car's standstill)
+    ret.cruiseState.standstill = bool(cam_cp.vl["FSM3"]["ACC_Standstill"]) and ret.standstill
+    ret.cruiseState.nonAdaptive = False
+    ret.accFaulted = False
+    self.eucd_acc_distance = cam_cp.vl["FSM1"]["ACC_Distance"]
+
+    # Check if servo stops responding when ACC is active
+    if ret.cruiseState.enabled and ret.vEgo > self.CP.minSteerSpeed:
+      if not self.eucd_cruise_enabled_prev:
+        self.eucd_eps_torque_timer = 0
+
+      if ret.steeringTorqueEps == 0:
+        self.eucd_eps_torque_timer += 1
+      else:
+        self.eucd_eps_torque_timer = 0
+
+      ret.steerFaultTemporary = self.eucd_eps_torque_timer >= CarControllerParams.EUCD_STEER_TIMEOUT
+    else:
+      ret.steerFaultTemporary = False
+
+    self.eucd_cruise_enabled_prev = ret.cruiseState.enabled
+
+    # gear
+    ret.gearShifter = GearShifter.drive
+
+    # safety
+    ret.stockFcw = False
+    ret.stockAeb = False
+
+    # button presses
+    ret.leftBlinker = pt_cp.vl["MiscCarInfo"]["TurnSignal"] == 1
+    ret.rightBlinker = pt_cp.vl["MiscCarInfo"]["TurnSignal"] == 3
+
+    # Synthesize one accelCruise/decelCruise per frame from pending delta.
+    cruise_kph_now = round(ret.cruiseState.speed * CV.MS_TO_KPH)
+    if ret.cruiseState.enabled and self.eucd_cruise_enabled_prev:
+      self._eucd_pending_delta += cruise_kph_now - self._eucd_cruise_speed_prev_kph
+    self._eucd_cruise_speed_prev_kph = cruise_kph_now
+
+    # Emit one event per physical ACC step; trigger on delta >= 1 to handle Volvo's
+    # sub-step snaps (e.g. 41->45 km/h) that would never reach a larger threshold.
+    step = max(1, self._eucd_custom_acc_step)
+    button_events = []
+    if self._eucd_pending_delta >= 1:
+      button_events.append(structs.CarState.ButtonEvent(pressed=False, type=ButtonType.accelCruise))
+      self._eucd_pending_delta = max(0, self._eucd_pending_delta - step)
+    elif self._eucd_pending_delta <= -1:
+      button_events.append(structs.CarState.ButtonEvent(pressed=False, type=ButtonType.decelCruise))
+      self._eucd_pending_delta = min(0, self._eucd_pending_delta + step)
+    ret.buttonEvents = button_events
+
+    # lock info
+    ret.doorOpen = not all([pt_cp.vl["Doors"]["DriverDoorClosed"], pt_cp.vl["Doors"]["PassengerDoorClosed"]])
+    ret.seatbeltUnlatched = False
+
+    self.eucd_pscm_stock_values = pt_cp.vl["PSCM1"]
+    self.eucd_stock_FSM1 = copy.copy(cam_cp.vl["FSM1"])
+    self.eucd_stock_FSM3 = copy.copy(cam_cp.vl["FSM3"])
+    # all frames this cycle of the messages carcontroller relays 1:1
+    self.eucd_stock_FSM0_frames = eucd_all_frames(cam_cp, "FSM0")
+    self.eucd_stock_FSM4_frames = eucd_all_frames(cam_cp, "FSM4")
+    self.eucd_stock_133_frames = eucd_all_frames(pt_cp, "NEW_MSG_133")
+    self.eucd_stock_323_frames = eucd_all_frames(pt_cp, "NEW_MSG_323")
+    self.eucd_stock_220_frames = eucd_all_frames(pt_cp, "wheelspeed1")
+    self.eucd_stock_299_frames = eucd_all_frames(pt_cp, "NEW_MSG_299")
+
+    fp_ret = custom.StarPilotCarState.new_message()
+    return ret, fp_ret
+
   @staticmethod
   def get_can_parsers(CP):
     if isinstance(CAR(CP.carFingerprint).config, VolvoC1PlatformConfig):
@@ -228,6 +347,34 @@ class CarState(CarStateBase):
           ("FSM0", 100),
           ("FSM1", 50),
         ], 2),
+      }
+
+    if isinstance(CAR(CP.carFingerprint).config, VolvoEUCDPlatformConfig):
+      pt_messages = [
+        ("VehicleSpeed1", 50),
+        ("AccPedal", 100),
+        ("BrakePedal", 50),
+        ("Brake_Info", 50),
+        ("PSCM1", 50),
+        ("ACC_Speed", 50),
+        ("MiscCarInfo", 25),
+        ("Doors", 20),
+        ("SAS0", 100),
+        ("EngineData", 66),
+        ("NEW_MSG_133", 50),
+        ("NEW_MSG_323", 25),
+        ("wheelspeed1", 50),
+        ("NEW_MSG_299", 50),
+      ]
+      cam_messages = [
+        ("FSM0", 100),
+        ("FSM1", 50),
+        ("FSM3", 50),
+        ("FSM4", 33),
+      ]
+      return {
+        Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, CANBUS.pt),
+        Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], cam_messages, CANBUS.cam),
       }
 
     return {

@@ -23,6 +23,8 @@ import pathlib
 import re
 import unittest
 
+import numpy as np
+
 from opendbc.car.volvo.interface import SAFETY_VOLVO
 from opendbc.car.volvo.values import VolvoSafetyFlags
 from opendbc.car.volvo.volvocan import create_c1_checksum, create_c1_steering_control
@@ -34,6 +36,7 @@ from opendbc.safety.tests.common import CANPackerSafety
 # Must match the flags in opendbc/safety/modes/volvo.h
 VOLVO_FLAG_SPA = VolvoSafetyFlags.SPA.value
 VOLVO_FLAG_C1 = VolvoSafetyFlags.C1.value
+VOLVO_FLAG_EUCD = VolvoSafetyFlags.EUCD.value
 
 # Must match VOLVO_SPEED_TO_MS in volvo.h and SPEED_TO_MS in carstate.py
 VOLVO_SPEED_TO_MS = 0.003977
@@ -513,6 +516,197 @@ class TestVolvoC1(common.CarSafetyTest, common.AngleSteeringSafetyTest):
     self._set_prev_desired_angle(0)
     address, data, bus = create_c1_steering_control(self.packer, 0, True)
     self.assertTrue(self._tx(libsafety_py.make_CANPacket(address, bus, data)))
+
+
+class TestVolvoEUCD(common.CarSafetyTest, common.AngleSteeringSafetyTest):
+  """
+  Volvo EUCD: V60 2010-18, with openpilot longitudinal control (oplong).
+
+  Adapted from the sunnypilot volvo_oplong port. Unlike CMA/SPA/C1, EUCD
+  relays stock FSM1/FSM3 camera frames to the ECM at 50Hz and overlays OP's
+  own accel/mode when openpilotLongitudinalControl is active, so it needs its
+  own longitudinal accel-range and fwd-hook coverage.
+  """
+  TX_MSGS = [[0x051, VOLVO_MAIN_BUS], [0x127, VOLVO_MAIN_BUS], [0x260, VOLVO_MAIN_BUS], [0x262, VOLVO_MAIN_BUS],
+             [0x270, VOLVO_MAIN_BUS], [0x31A, VOLVO_MAIN_BUS], [0x246, VOLVO_PARTY_BUS], [0x133, VOLVO_PARTY_BUS],
+             [0x323, VOLVO_PARTY_BUS], [0x220, VOLVO_PARTY_BUS], [0x299, VOLVO_PARTY_BUS]]
+  GAS_PRESSED_THRESHOLD = 10
+  STANDSTILL_THRESHOLD = 0.1
+  RELAY_MALFUNCTION_ADDRS = {VOLVO_MAIN_BUS: [0x051, 0x262, 0x31A], VOLVO_PARTY_BUS: [0x246, 0x133, 0x323, 0x220, 0x299]}
+  FWD_BLACKLISTED_ADDRS = {VOLVO_PARTY_BUS: [0x051, 0x262, 0x31A], VOLVO_MAIN_BUS: [0x051, 0x246, 0x133, 0x323, 0x220, 0x299]}
+
+  # Angle control limits
+  STEER_ANGLE_MAX = 90  # deg, matches CarControllerParams.EUCD_ANGLE_LIMITS
+  DEG_TO_CAN = 100
+
+  ANGLE_RATE_BP = [0., 5., 15.]
+  ANGLE_RATE_UP = [5., .8, .15]  # windup limit
+  ANGLE_RATE_DOWN = [5., 3.5, .4]  # unwind limit
+
+  def setUp(self):
+    self.packer = CANPackerSafety("volvo_v60_2015_pt")
+    self.safety = libsafety_py.libsafety
+    self.safety.set_safety_hooks(SAFETY_VOLVO, VOLVO_FLAG_EUCD)
+    self.safety.init_tests()
+
+  def _angle_cmd_msg(self, angle: float, enabled: bool):
+    # LKAAngleReq carries the signed angle the safety rate-limits. LKASteerDirection is the
+    # car's per-frame actuation gate (set here for realism) but is NOT used by the safety to
+    # decide engagement — it drops to NONE during the anti-windup pause while OP stays engaged.
+    direction = (2 if angle > 0 else 1) if enabled else 0
+    values = {"LKAAngleReq": angle, "LKASteerDirection": direction}
+    return self.packer.make_can_msg_safety("FSM2", VOLVO_MAIN_BUS, values)
+
+  def _angle_meas_msg(self, angle: float):
+    values = {"SteeringAngleServo": angle}
+    return self.packer.make_can_msg_safety("PSCM1", VOLVO_MAIN_BUS, values)
+
+  def _pcm_status_msg(self, enable):
+    # engagement comes from the ECM (EngineData), not from the camera's FSM0
+    values = {"ACC_State_ECM": 3 if enable else 2}  # engaged / standby
+    return self.packer.make_can_msg_safety("EngineData", VOLVO_MAIN_BUS, values)
+
+  def _fsm0_msg(self, acc_enabled: bool):
+    values = {"ACC_Enabled": 1 if acc_enabled else 0, "ACC_Available": 1}
+    return self.packer.make_can_msg_safety("FSM0", VOLVO_MAIN_BUS, values)
+
+  def test_fsm0_acc_enabled_only_with_ecm_engaged(self):
+    # OP relays FSM0 to the car; it must never report ACC enabled while the ECM is not engaged
+    for ecm_engaged in (False, True):
+      self._rx(self._pcm_status_msg(ecm_engaged))
+      self.assertTrue(self._tx(self._fsm0_msg(False)))
+      self.assertEqual(ecm_engaged, self._tx(self._fsm0_msg(True)), f"{ecm_engaged=}")
+
+  def test_ecm_acc_off_is_not_engaged(self):
+    # EngineData ACC_State_ECM: 1 off, 2 standby, 3 engaged. Turning ACC off (On/Off in standby) gives 1, which has
+    # bit 4 set like engaged (route 823); only 3 allows controls
+    for state, engaged in ((1, False), (2, False), (3, True)):
+      self.safety.set_controls_allowed(False)
+      self._rx(self._pcm_status_msg(False))
+      self._rx(self.packer.make_can_msg_safety("EngineData", VOLVO_MAIN_BUS, {"ACC_State_ECM": state}))
+      self.assertEqual(engaged, self.safety.get_controls_allowed(), f"{state=}")
+
+  def test_camera_fsm0_does_not_engage(self):
+    # the camera's FSM0 is not an engagement source anymore
+    self.safety.set_controls_allowed(False)
+    self._rx(self.packer.make_can_msg_safety("FSM0", VOLVO_PARTY_BUS, {"ACC_Enabled": 1}))
+    self.assertFalse(self.safety.get_controls_allowed())
+
+  def _speed_msg(self, speed: float):
+    values = {"VehicleSpeed": speed * 3.6}
+    return self.packer.make_can_msg_safety("VehicleSpeed1", VOLVO_MAIN_BUS, values)
+
+  def _user_brake_msg(self, brake):
+    values = {"BrakePedal": 2 if brake else 0}
+    return self.packer.make_can_msg_safety("Brake_Info", VOLVO_MAIN_BUS, values)
+
+  def _user_gas_msg(self, gas):
+    values = {"AccPedal": 10 if gas else 0}
+    return self.packer.make_can_msg_safety("AccPedal", VOLVO_MAIN_BUS, values)
+
+  def _speed_msg_2(self, speed):
+    return None
+
+  def _longitudinal_cmd_msg(self, accel: float):
+    values = {"ACC_AccelerationRequest": accel, "ACC_Check": 0}
+    return self.packer.make_can_msg_safety("FSM3", VOLVO_MAIN_BUS, values)
+
+  def test_longitudinal_relay_when_controls_not_allowed(self):
+    # OP relays FSM3 at 50Hz even when controls are not allowed (to keep the ECU alive).
+    # The safety hook must allow inactive accel (0.0) and block any non-zero accel.
+    self.safety.set_controls_allowed(False)
+    self.assertTrue(self._tx(self._longitudinal_cmd_msg(0.0)))    # neutral — must pass
+    self.assertFalse(self._tx(self._longitudinal_cmd_msg(1.0)))   # any accel — must be blocked
+    self.assertFalse(self._tx(self._longitudinal_cmd_msg(-1.0)))  # any decel — must be blocked
+
+  def test_longitudinal_accel_limits_when_controls_allowed(self):
+    # When controls are allowed, FSM3 accel is range-checked via longitudinal_accel_checks.
+    self.safety.set_controls_allowed(True)
+    self.assertTrue(self._tx(self._longitudinal_cmd_msg(0.0)))   # neutral — must pass
+    self.assertTrue(self._tx(self._longitudinal_cmd_msg(2.0)))   # max accel — must pass
+    self.assertTrue(self._tx(self._longitudinal_cmd_msg(-4.0)))  # max decel — must pass
+    self.assertFalse(self._tx(self._longitudinal_cmd_msg(2.1)))  # above max accel — must block
+    self.assertFalse(self._tx(self._longitudinal_cmd_msg(-4.1))) # below min accel — must block
+
+  def test_fwd_hook_blocks_fsm_when_controls_allowed(self):
+    # When controls are allowed and gas is not pressed, OP relays FSM1/FSM3 itself,
+    # so stock cam->main messages for those addrs must be blocked.
+    for controls_allowed in (True, False):
+      for gas_pressed in (True, False):
+        self.safety.set_controls_allowed(controls_allowed)
+        self._rx(self._user_gas_msg(gas_pressed))
+        for addr in (0x260, 0x270):  # VOLVO_EUCD_FSM1, VOLVO_EUCD_FSM3
+          result = self.safety.safety_fwd_hook(VOLVO_PARTY_BUS, addr)
+          should_block = controls_allowed and not gas_pressed
+          expected = -1 if should_block else VOLVO_MAIN_BUS
+          self.assertEqual(expected, result, f"{addr=:#x} {controls_allowed=} {gas_pressed=}")
+
+  # Volvo gates the angle command on engagement, not on the LKASteerDirection flag (which
+  # drops to NONE mid-control during the anti-windup pause), and uses inactive_angle_is_zero:
+  # while engaged the rate-limited angle is allowed, while disengaged only a zero angle passes.
+  # The two methods below mirror AngleSteeringSafetyTest but adjust those expectations.
+  def test_angle_cmd_when_disabled(self):
+    for controls_allowed in (True, False):
+      self.safety.set_controls_allowed(controls_allowed)
+
+      for angle_meas in np.arange(-90, 91, 10):
+        self._reset_angle_measurement(angle_meas)
+
+        for angle_cmd in np.arange(-90, 91, 10):
+          self._set_prev_desired_angle(angle_cmd)
+
+          # engaged: angle (held at prev) is allowed; disengaged: only a zero angle passes
+          should_tx = controls_allowed or (angle_cmd == 0)
+          self.assertEqual(should_tx, self._tx(self._angle_cmd_msg(angle_cmd, True)))
+
+  def test_angle_cmd_when_enabled(self):
+    # when controls are allowed, angle cmd rate limit is enforced
+    speeds = [0., 1., 5., 10., 15., 50.]
+    if self.STEER_ANGLE_TEST_MAX is None:
+        self.STEER_ANGLE_TEST_MAX = self.STEER_ANGLE_MAX * 2
+    angles = np.concatenate((np.arange(-self.STEER_ANGLE_TEST_MAX, self.STEER_ANGLE_TEST_MAX, 5), [0]))
+    for a in angles:
+      for s in speeds:
+        max_delta_up = np.interp(s, self.ANGLE_RATE_BP, self.ANGLE_RATE_UP)
+        max_delta_down = np.interp(s, self.ANGLE_RATE_BP, self.ANGLE_RATE_DOWN)
+
+        # first test against false positives
+        self._reset_angle_measurement(a)
+        self._reset_speed_measurement(s)
+
+        self._set_prev_desired_angle(a)
+        self.safety.set_controls_allowed(1)
+
+        # Stay within limits
+        # Up
+        self.assertTrue(self._tx(self._angle_cmd_msg(a + common.sign_of(a) * max_delta_up, True)))
+        self.assertTrue(self.safety.get_controls_allowed())
+
+        # Don't change
+        self.assertTrue(self._tx(self._angle_cmd_msg(a, True)))
+        self.assertTrue(self.safety.get_controls_allowed())
+
+        # Down
+        self.assertTrue(self._tx(self._angle_cmd_msg(a - common.sign_of(a) * max_delta_down, True)))
+        self.assertTrue(self.safety.get_controls_allowed())
+
+        # Inject too high rates
+        # Up
+        self.assertFalse(self._tx(self._angle_cmd_msg(a + common.sign_of(a) * (max_delta_up + 1.1), True)))
+
+        # Don't change
+        self.safety.set_controls_allowed(1)
+        self._set_prev_desired_angle(a)
+        self.assertTrue(self.safety.get_controls_allowed())
+        self.assertTrue(self._tx(self._angle_cmd_msg(a, True)))
+        self.assertTrue(self.safety.get_controls_allowed())
+
+        # Down
+        self.assertFalse(self._tx(self._angle_cmd_msg(a - common.sign_of(a) * (max_delta_down + 1.1), True)))
+
+        # When disabled, only a zero angle is allowed (inactive_angle_is_zero)
+        self.safety.set_controls_allowed(0)
+        self.assertEqual(a == 0, self._tx(self._angle_cmd_msg(a, False)))
 
 
 if __name__ == "__main__":

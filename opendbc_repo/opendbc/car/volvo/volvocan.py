@@ -1,6 +1,9 @@
+import numpy as np
+
 from opendbc.car.volvo.helpers import (checksum_lca_2_message, checksum_2_0x69_message, checksum_1_pscm_related_message,
                                        checksum_2_pscm_related_message, checksum_lca_5_message)
 from opendbc.car.carlog import carlog
+from opendbc.car.volvo.values import CANBUS, CarControllerParams, LongMode
 
 
 def create_c1_pscm_message(packer, msg_pscm: dict):
@@ -506,3 +509,211 @@ def create_lca_7_message(packer, lat_active: bool, msg_lca_7: dict, lca_7_steer:
       values[key] = val
 
   return packer.make_can_msg('LCA_7', 2, values)
+
+
+# ---- V60/EUCD (FSM0-4, PSCM1) ----
+# Adapted from the sunnypilot volvo_oplong port.
+
+def create_eucd_button_msg(packer, resume=False, cancel=False, set_plus=False, minus=False, bus=0):
+  msg = {
+    "ACCOnOffBtn": cancel,
+    "ACCOnOffBtnInv": not cancel,
+    "ACCResumeBtn": resume,
+    "ACCResumeBtnInv": not resume,
+    "ACCSetBtn": set_plus,
+    "ACCSetBtnInv": not set_plus,
+    "ACCMinusBtn": minus,
+    "ACCMinusBtnInv": not minus,
+  }
+  return packer.make_can_msg("CCButtons", bus, msg)
+
+
+def create_eucd_lkas_state_msg(packer, steering_angle: float, stock_values: dict):
+  # servo state to the camera, LKA torque/active cleared
+  msg = {
+    "LKATorque": 0,
+    "SteeringAngleServo": steering_angle,
+    "byte0": stock_values["byte0"],
+    "byte4": stock_values["byte4"],
+    "byte7": stock_values["byte7"],
+    "LKAActive": int(stock_values["LKAActive"]) & 0xF5,
+    "EPSTorque": stock_values["EPSTorque"],
+  }
+  return packer.make_can_msg("PSCM1", 2, msg)
+
+
+def calculate_eucd_lka_checksum(dat: bytearray) -> int:
+  steer_angle_request = ((dat[3] & 0x3F) << 8) + dat[4]
+  steering_direction_request = dat[5] & 0x03
+  trqlim = dat[2]
+
+  s = (trqlim + steering_direction_request + steer_angle_request + (steer_angle_request >> 8)) & 0xFF
+  return s ^ 0xFF
+
+
+def create_eucd_lka_msg(packer, apply_steer: float, steer_direction: int):
+  values = {
+    "LKAAngleReq": apply_steer,
+    "LKASteerDirection": steer_direction,
+    "TrqLim": 0,
+
+    "SET_X_22": 0x25,
+    "SET_X_02": 0,
+    "SET_X_10": 0x10,
+    "SET_X_A4": 0xa7,
+  }
+
+  # calculate checksum
+  dat = packer.make_can_msg("FSM2", 0, values)[1]
+  values["Checksum"] = calculate_eucd_lka_checksum(dat)
+
+  return packer.make_can_msg("FSM2", 0, values)
+
+
+def eucd_next_long_mode(mode: LongMode, accel: float) -> LongMode:
+  CCP = CarControllerParams
+  if mode == LongMode.BRAKE:
+    if accel <= CCP.EUCD_BRAKE_EXIT:
+      return LongMode.BRAKE
+  elif mode == LongMode.DRIVE:
+    if accel >= CCP.EUCD_DRIVE_EXIT:
+      return LongMode.DRIVE
+  if accel < CCP.EUCD_BRAKE_ENTER:
+    return LongMode.BRAKE
+  if accel > CCP.EUCD_DRIVE_ENTER:
+    return LongMode.DRIVE
+  return LongMode.COAST
+
+
+def eucd_fsm3_traction(accel: float, mode: LongMode) -> int:
+  # FSM3 Byte_3 traction request (fit to the stock camera)
+  if mode == LongMode.BRAKE:
+    return 0
+  if mode == LongMode.DRIVE:
+    return min(max(round(89 * accel - 4), 0), 165)
+  return min(max(round(57 * accel - 15), -127), -1) & 0xFF
+
+
+def create_eucd_longitudinal(packer, stock_fsm3, accel, acc_check, mode: LongMode | None = None, good_fsm3=None):
+  # Camera FSM3 with OP's accel and ACC_Check; with mode, also OP's mode (Byte_2 bits 1:0) and traction.
+  # good_fsm3: the camera's last good frame, held toward the ECM.
+  values = {s: stock_fsm3[s] for s in (
+    "ACC_Standstill",
+    "Byte_01",
+    "Byte_02",
+    "Byte_2",
+    "Byte_3",
+    "Byte_4",
+    "Byte_5",
+    "Byte_6",
+    "Byte_7",
+  )}
+  values |= {
+    "ACC_AccelerationRequest": accel,
+    "ACC_Check": acc_check,
+  }
+  if mode is not None:
+    values["Byte_2"] = (int(stock_fsm3["Byte_2"]) & 0xFC) | int(mode)
+    values["Byte_3"] = eucd_fsm3_traction(accel, mode)
+  if good_fsm3 is not None:
+    values |= {s: good_fsm3[s] for s in ("ACC_Standstill", "Byte_01", "Byte_02")}
+    base = 0xD4 if int(stock_fsm3["Byte_4"]) == 0x81 else 0x00  # data / type frame
+    values["Byte_2"] = base | (int(mode) if mode is not None else int(good_fsm3["Byte_2"]) & 0x03)
+    values["Byte_6"] = 0
+  return packer.make_can_msg("FSM3", 0, values)
+
+
+def eucd_fsm4_brake_value(accel: float, brake: bool) -> int:
+  # FSM4 Byte_5/Byte_6: 0x8000 | brake flag 0x4000 | 14-bit target
+  CCP = CarControllerParams
+  bp, v = (CCP.EUCD_FSM4_BRAKE_ACCEL_BP, CCP.EUCD_FSM4_BRAKE_VALUE_V) if brake else (CCP.EUCD_FSM4_NO_BRAKE_ACCEL_BP, CCP.EUCD_FSM4_NO_BRAKE_VALUE_V)
+  return 0x8000 | (0x4000 if brake else 0) | int(round(float(np.interp(accel, bp, v))))
+
+
+EUCD_BYTES = tuple(f"Byte_{i}" for i in range(8))
+
+
+def create_eucd_fsm4(packer, stock_fsm4, accel: float, mode: LongMode | None = None, good_byte2: int | None = None,
+                     cam_weight: float = 0.):
+  # Camera FSM4 relayed per frame; with mode, the brake flag and target follow OP's accel when either side brakes.
+  values = {s: stock_fsm4[s] for s in ("Byte_0", "Byte_1", "Byte_2", "ACC_LeadSpeed", "Byte_4", "Byte_5", "Byte_6", "Byte_7")}
+  op_brake = mode == LongMode.BRAKE
+  cam_brake = bool(int(stock_fsm4["Byte_5"]) & 0x40)
+  if mode is not None and (op_brake or cam_brake):
+    value = eucd_fsm4_brake_value(accel, op_brake)
+    if cam_weight > 0. and op_brake and cam_brake:
+      # blend into the camera's target while handing it the stop
+      cam_value = ((int(stock_fsm4["Byte_5"]) << 8) | int(stock_fsm4["Byte_6"])) & 0x3FFF
+      blended = int(round((value & 0x3FFF) + cam_weight * (cam_value - (value & 0x3FFF))))
+      value = (value & 0xC000) | blended
+    values["Byte_5"] = value >> 8
+    values["Byte_6"] = value & 0xFF
+  if good_byte2 is not None:
+    values["Byte_2"] = good_byte2
+  return packer.make_can_msg("FSM4", 0, values)
+
+
+def create_eucd_fsm0(packer, stock_fsm0, ecm_engaged: bool, good_fsm0=None):
+  # Camera FSM0 relayed per frame, never ACC enabled without the ECM engaged.
+  # good_fsm0: the camera's last good state, held toward the ECM (lead bit stays live).
+  values = {s: stock_fsm0[s] for s in EUCD_BYTES}
+  if good_fsm0 is not None:
+    values["Byte_2"] = (int(good_fsm0["Byte_2"]) & ~0x01) | (int(stock_fsm0["Byte_2"]) & 0x01)
+    values["Byte_3"] = good_fsm0["Byte_3"]
+    values["Byte_7"] = int(stock_fsm0["Byte_7"]) & ~0x04
+  if not ecm_engaged:
+    values["Byte_2"] = int(values["Byte_2"]) & ~0x04
+  return packer.make_can_msg("FSM0", 0, values)
+
+
+def create_eucd_cam_brake_status(packer, stock_323, mask: bool):
+  # 0x323 to the camera; masked: Byte_4 bit4 (brake applied) cleared
+  values = {s: stock_323[s] for s in EUCD_BYTES}
+  if mask:
+    values["Byte_4"] = int(stock_323["Byte_4"]) & ~0x10
+  return packer.make_can_msg("NEW_MSG_323", CANBUS.cam, values)
+
+
+def create_eucd_cam_brake_level(packer, stock_133, frozen_level: int | None):
+  # 0x133 to the camera; masked: Byte_1 bits 6:0 (brake level) held
+  values = {s: stock_133[s] for s in EUCD_BYTES}
+  if frozen_level is not None:
+    values["Byte_1"] = (int(stock_133["Byte_1"]) & 0x80) | (frozen_level & 0x7F)
+  return packer.make_can_msg("NEW_MSG_133", CANBUS.cam, values)
+
+
+def create_eucd_cam_wheel_status(packer, stock_220, mask: bool, spoof: bool = False):
+  # 0x220 to the camera; Byte_2 bit2 (brake request active): masked clears it, spoofed sets it
+  values = {s: stock_220[s] for s in EUCD_BYTES}
+  if mask:
+    values["Byte_2"] = int(stock_220["Byte_2"]) & ~0x04
+  elif spoof:
+    values["Byte_2"] = int(stock_220["Byte_2"]) | 0x04
+  return packer.make_can_msg("wheelspeed1", CANBUS.cam, values)
+
+
+def create_eucd_cam_brake_request_ack(packer, stock_299, mask: bool, spoof: bool = False):
+  # 0x299 to the camera; Byte_5 bit3 (brake ack, active low): masked sets it, spoofed clears it
+  values = {s: stock_299[s] for s in EUCD_BYTES}
+  if mask:
+    values["Byte_5"] = int(stock_299["Byte_5"]) | 0x08
+  elif spoof:
+    values["Byte_5"] = int(stock_299["Byte_5"]) & ~0x08
+  return packer.make_can_msg("NEW_MSG_299", CANBUS.cam, values)
+
+
+def create_eucd_radar(packer, stock_fsm1, mode: LongMode | None = None):
+  # Camera FSM1 relayed; with mode, Byte_2 bit2 follows OP braking
+  values = {s: stock_fsm1[s] for s in (
+    "ACC_Distance",
+    "Byte_1",
+    "Byte_2",
+    "Byte_3",
+    "Byte_4",
+    "Byte_5",
+    "Byte_6",
+    "Byte_7",
+  )}
+  if mode is not None:
+    values["Byte_2"] = (int(stock_fsm1["Byte_2"]) & ~0x04) | (0x04 if mode == LongMode.BRAKE else 0)
+  return packer.make_can_msg("FSM1", 0, values)
