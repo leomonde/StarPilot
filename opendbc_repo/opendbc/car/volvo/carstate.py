@@ -61,6 +61,7 @@ class CarState(CarStateBase):
     self._eucd_cruise_speed_prev_kph = 0
     self._eucd_pending_delta = 0
     self._eucd_custom_acc_step = 1
+    self.eucd_gap_button_states = {"TimeGapIncreaseBtn": False, "TimeGapDecreaseBtn": False}
 
   def update(self, can_parsers, starpilot_toggles) -> structs.CarState:
     if self.is_c1:
@@ -310,6 +311,13 @@ class CarState(CarStateBase):
     elif self._eucd_pending_delta <= -1:
       button_events.append(structs.CarState.ButtonEvent(pressed=False, type=ButtonType.decelCruise))
       self._eucd_pending_delta = min(0, self._eucd_pending_delta + step)
+
+    # time gap buttons: StarPilot cycles the driving personality on gapAdjustCruise.
+    # A press needs the signal set and its inverted copy cleared.
+    for signal in self.eucd_gap_button_states:
+      pressed = bool(pt_cp.vl["CCButtons"][signal]) and not pt_cp.vl["CCButtons"][signal + "Inv"]
+      button_events.extend(create_button_events(pressed, self.eucd_gap_button_states[signal], {True: ButtonType.gapAdjustCruise}))
+      self.eucd_gap_button_states[signal] = pressed
     ret.buttonEvents = button_events
 
     # lock info
@@ -361,6 +369,7 @@ class CarState(CarStateBase):
         ("Doors", 20),
         ("SAS0", 100),
         ("EngineData", 66),
+        ("CCButtons", 66),
         ("NEW_MSG_133", 50),
         ("NEW_MSG_323", 25),
         ("wheelspeed1", 50),
