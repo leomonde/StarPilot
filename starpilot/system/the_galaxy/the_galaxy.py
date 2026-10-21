@@ -1747,6 +1747,7 @@ FINGERPRINT_MAKE_TO_VALUES_DIR = {
   "tesla": "tesla",
   "toyota": "toyota",
   "volkswagen": "volkswagen",
+  "volvo": "volvo",
 }
 
 _FINGERPRINT_CARDOCS_RE = re.compile(r'\w*CarDocs\w*\(\s*"([^"]+)"')

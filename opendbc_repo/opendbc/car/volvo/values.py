@@ -2,11 +2,11 @@ from dataclasses import dataclass, field
 from enum import IntEnum, IntFlag
 
 from opendbc.car.structs import CarParams
-from opendbc.car import Bus, CarSpecs, DbcDict, PlatformConfig, Platforms, DT_CTRL
+from opendbc.car import Bus, CarSpecs, DbcDict, PlatformConfig, Platforms, uds, DT_CTRL
 from opendbc.car.lateral import AngleSteeringLimits
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.docs_definitions import CarDocs, CarHarness, CarParts
-from opendbc.car.fw_query_definitions import FwQueryConfig
+from opendbc.car.fw_query_definitions import FwQueryConfig, Request, p16
 
 Ecu = CarParams.Ecu
 
@@ -289,8 +289,20 @@ class CAR(Platforms):
 #     ),
 #   ],
 # )
+VOLVO_VERSION_REQUEST = bytes([uds.SERVICE_TYPE.READ_DATA_BY_IDENTIFIER]) + \
+  p16(0xf1a2)
+VOLVO_VERSION_RESPONSE = bytes([uds.SERVICE_TYPE.READ_DATA_BY_IDENTIFIER + 0x40]) + \
+  p16(0xf1a2)
+
+# V60/EUCD is identified by the engine FW (its CAN fingerprint varies with equipment); V40/C1 by CAN fingerprint
 FW_QUERY_CONFIG = FwQueryConfig(
-  requests=[]
+  requests=[
+    Request(
+      [VOLVO_VERSION_REQUEST],
+      [VOLVO_VERSION_RESPONSE],
+      bus=0,
+    ),
+  ],
 )
 
 DBC = CAR.create_dbc_map()
