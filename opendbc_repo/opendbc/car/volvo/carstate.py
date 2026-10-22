@@ -336,6 +336,9 @@ class CarState(CarStateBase):
     self.eucd_stock_299_frames = eucd_all_frames(pt_cp, "NEW_MSG_299")
 
     fp_ret = custom.StarPilotCarState.new_message()
+    # TSR speed limit from the camera (0 = no sign)
+    tsr_kph = cam_cp.vl["FSM5"]["TSR_Speed"]
+    fp_ret.dashboardSpeedLimit = tsr_kph * CV.KPH_TO_MS if tsr_kph > 0 else 0.0
     return ret, fp_ret
 
   @staticmethod
@@ -380,6 +383,7 @@ class CarState(CarStateBase):
         ("FSM1", 50),
         ("FSM3", 50),
         ("FSM4", 33),
+        ("FSM5", 10),
       ]
       return {
         Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, CANBUS.pt),

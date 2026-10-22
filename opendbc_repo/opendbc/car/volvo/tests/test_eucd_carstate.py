@@ -1,10 +1,12 @@
 import pytest
 
 from cereal import custom
-from opendbc.car import ButtonType, CanData
+from opendbc.can.packer import CANPacker
+from opendbc.car import Bus, ButtonType, CanData
+from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.volvo.carstate import CarState
 from opendbc.car.volvo.interface import CarInterface
-from opendbc.car.volvo.values import CAR
+from opendbc.car.volvo.values import CAR, DBC
 
 CCBUTTONS = 0x127
 # CCButtons frames from V60 routes: idle, time gap increase, time gap decrease
@@ -40,3 +42,14 @@ def test_gap_button_press_and_release(car, pressed):
 def test_gap_button_needs_inverted_signal(car):
   assert step(car, 1_000_000, IDLE) == []
   assert step(car, 2_000_000, GAP_INCREASE_NO_INV) == []
+
+
+@pytest.mark.parametrize("tsr_kph", [0, 30, 80, 120])
+def test_tsr_speed_limit(car, tsr_kph):
+  cs, parsers = car
+  packer = CANPacker(DBC[CAR.VOLVO_V60][Bus.pt])
+  addr, dat, bus = packer.make_can_msg("FSM5", 2, {"TSR_Speed": tsr_kph})
+  for parser in parsers.values():
+    parser.update([(1_000_000, [CanData(addr, dat, bus)])])
+  _, fp_ret = cs.update(parsers, None)
+  assert fp_ret.dashboardSpeedLimit == pytest.approx(tsr_kph * CV.KPH_TO_MS)
