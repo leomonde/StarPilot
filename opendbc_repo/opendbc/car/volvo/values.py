@@ -171,6 +171,10 @@ class CarControllerParams:
   EUCD_OP_BRAKE_OVERRIDE_ACCEL = -0.3  # m/s^2, OP brakes if it wants less than this and the camera does not brake
   EUCD_OP_BRAKE_OVERRIDE_MARGIN = 1.0  # m/s^2, OP brakes if it wants this much more than the camera
 
+  # FSM3 shows the camera's BRAKE mode while both decelerate and OP coasts (routes 849/84b: the camera
+  # aborted after ~4 s of its BRAKE vs OP's COAST). FSM3 only: FSM4 and the brake-ack mask stay on COAST.
+  EUCD_FSM3_FOLLOWS_CAMERA_BRAKE_MODE = True
+
   # Keep the ECM engaged on the camera's last good frames after a camera abort (latched a fault in testing)
   EUCD_OP_OWNS_ACC_AFTER_CAMERA_ABORT = False
 

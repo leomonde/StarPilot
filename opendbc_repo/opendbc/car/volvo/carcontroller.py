@@ -501,8 +501,17 @@ class CarController(CarControllerBase):
 
     return [
       create_eucd_radar(self.packer, CS.eucd_stock_FSM1),
-      create_eucd_longitudinal(self.packer, CS.eucd_stock_FSM3, accel, acc_check, long_mode, good_fsm3),
+      create_eucd_longitudinal(self.packer, CS.eucd_stock_FSM3, accel, acc_check, self._eucd_fsm3_mode(CS, accel, long_mode), good_fsm3),
     ]
+
+  def _eucd_fsm3_mode(self, CS, accel, long_mode):
+    """Mode written to FSM3: OP's, or the camera's BRAKE while both decelerate and OP coasts."""
+    cam_mode = int(CS.eucd_stock_FSM3["Byte_2"]) & 0x3
+    cam_accel = float(CS.eucd_stock_FSM3["ACC_AccelerationRequest"])
+    if (CarControllerParams.EUCD_FSM3_FOLLOWS_CAMERA_BRAKE_MODE and long_mode == LongMode.COAST and
+        cam_mode == LongMode.BRAKE and accel < 0. and cam_accel < 0.):
+      return LongMode.BRAKE
+    return long_mode
 
   def _eucd_long_decision(self, CC, CS):
     """OP long active: accel and mode from OP, the camera's brake request, or the camera's final stop."""
