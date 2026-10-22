@@ -2,12 +2,13 @@ import pytest
 
 from cereal import custom
 from opendbc.can.packer import CANPacker
-from opendbc.car import Bus, ButtonType, CanData
+from opendbc.car import Bus, ButtonType, CanData, structs
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.volvo.carstate import CarState
 from opendbc.car.volvo.interface import CarInterface
 from opendbc.car.volvo.values import CAR, DBC
 
+GearShifter = structs.CarState.GearShifter
 CCBUTTONS = 0x127
 # CCButtons frames from V60 routes: idle, time gap increase, time gap decrease
 IDLE = bytes.fromhex("88108761a7ff0000")
@@ -53,3 +54,21 @@ def test_tsr_speed_limit(car, tsr_kph):
     parser.update([(1_000_000, [CanData(addr, dat, bus)])])
   _, fp_ret = cs.update(parsers, None)
   assert fp_ret.dashboardSpeedLimit == pytest.approx(tsr_kph * CV.KPH_TO_MS)
+
+
+@pytest.mark.parametrize("gear, speed_kph, expected", [
+  (44, 0, GearShifter.reverse),
+  (44, 8, GearShifter.reverse),
+  (44, 15, GearShifter.drive),  # 44 is only trusted below 3 m/s
+  (50, 0, GearShifter.drive),
+  (164, 40, GearShifter.drive),
+])
+def test_reverse_gear(car, gear, speed_kph, expected):
+  cs, parsers = car
+  packer = CANPacker(DBC[CAR.VOLVO_V60][Bus.pt])
+  msgs = [packer.make_can_msg("Gear_Info", 0, {"Gear": gear}),
+          packer.make_can_msg("VehicleSpeed1", 0, {"VehicleSpeed": speed_kph})]
+  for parser in parsers.values():
+    parser.update([(1_000_000, [CanData(*m) for m in msgs])])
+  ret, _ = cs.update(parsers, None)
+  assert ret.gearShifter == expected

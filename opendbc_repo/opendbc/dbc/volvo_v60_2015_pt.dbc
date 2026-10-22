@@ -118,9 +118,10 @@ BO_ 384 Accessories_02: 8 XXX
  SG_ Park_Assist_State : 42|1@0+ (1,0) [0|1] "" XXX
  SG_ StartStop_Inv : 44|1@0+ (1,0) [0|1] "" XXX
 
-BO_ 465 NEW_MSG_4: 8 XXX
+BO_ 465 Gear_Info: 8 XXX
  SG_ BrakePressedInv : 3|1@0+ (1,0) [0|1] "" XXX
  SG_ NEW_SIGNAL_1 : 55|16@0+ (1,0) [0|4095] "" XXX
+ SG_ Gear : 31|8@0+ (1,0) [0|255] "" XXX
 
 BO_ 522 Brake_Info: 8 XXX
  SG_ NEW_SIGNAL_2 : 1|1@0+ (1,0) [0|1] "" XXX
