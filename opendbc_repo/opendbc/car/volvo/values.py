@@ -168,15 +168,12 @@ class CarControllerParams:
   EUCD_OP_BRAKE_OVERRIDE_ACCEL = -0.3  # m/s^2, OP brakes if it wants less than this and the camera does not brake
   EUCD_OP_BRAKE_OVERRIDE_MARGIN = 1.0  # m/s^2, OP brakes if it wants this much more than the camera
 
-  # Camera slowing down. The camera aborts if the car keeps ignoring it, so OP follows it:
-  # - its hydraulic brake below CAMERA_BRAKE_HONOR_BELOW at once (milder ones: ignored, ack spoofed)
-  # - a milder request with a target, after CAMERA_SLOWDOWN_GRACE of OP speeding up (route 852 aborted after 3 s)
-  # - FSM3 shows its BRAKE mode while both decelerate (routes 849/84b aborted after ~4 s of BRAKE vs COAST)
-  # OP braking more than the camera is never limited.
+  # The camera aborts (0x10) after ~3-6 s of its FSM3 mode 0 while the car gets another mode (routes 821-854),
+  # so FSM3 shows mode 0 whenever the camera does (mode bits only: FSM4 decides the hydraulic brake).
+  # Its hydraulic brake below CAMERA_BRAKE_HONOR_BELOW is followed at once (milder ones: ignored, ack spoofed).
   EUCD_CAMERA_BRAKE_HONOR_BELOW = -2.0  # m/s^2
-  EUCD_CAMERA_SLOWDOWN_ACCEL = -0.15    # m/s^2, a milder request counts below this
-  EUCD_CAMERA_SLOWDOWN_GRACE = 1.5      # s
-  EUCD_CAMERA_SLOWDOWN_RAMP = 0.5       # s, blend in and out
+  # Uphill, coasting already decelerates: the BRAKE mode thresholds move down by it (route 858 braked on a 5° slope)
+  EUCD_COAST_PITCH_GAIN = 5.65  # m/s^2 per sin(pitch), openpilot's coast fit
 
 
 class CANBUS:

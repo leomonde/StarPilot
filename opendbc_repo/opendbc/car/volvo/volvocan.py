@@ -570,15 +570,16 @@ def create_eucd_lka_msg(packer, apply_steer: float, steer_direction: int):
   return packer.make_can_msg("FSM2", 0, values)
 
 
-def eucd_next_long_mode(mode: LongMode, accel: float) -> LongMode:
+def eucd_next_long_mode(mode: LongMode, accel: float, brake_offset: float = 0.) -> LongMode:
+  # brake_offset (<= 0): uphill coast decel, the BRAKE thresholds move down by it
   CCP = CarControllerParams
   if mode == LongMode.BRAKE:
-    if accel <= CCP.EUCD_BRAKE_EXIT:
+    if accel <= CCP.EUCD_BRAKE_EXIT + brake_offset:
       return LongMode.BRAKE
   elif mode == LongMode.DRIVE:
     if accel >= CCP.EUCD_DRIVE_EXIT:
       return LongMode.DRIVE
-  if accel < CCP.EUCD_BRAKE_ENTER:
+  if accel < CCP.EUCD_BRAKE_ENTER + brake_offset:
     return LongMode.BRAKE
   if accel > CCP.EUCD_DRIVE_ENTER:
     return LongMode.DRIVE

@@ -1,3 +1,4 @@
+import math
 from collections import deque
 
 import numpy as np
@@ -52,8 +53,6 @@ class CarController(CarControllerBase):
     self.eucd_cam_stop_w = 0.
     self.eucd_cam_relay = False
     self.eucd_cam_weight = 0.
-    self.eucd_oppose_time = 0.  # s of camera slowing down vs OP speeding up
-    self.eucd_slowdown_w = 0.   # 1 = OP's accel limited to the camera's
     self.eucd_spoof_cam_ack = False
     self.eucd_cam_brake_target = 0
     self.eucd_cam_mask_frames = 0
@@ -464,8 +463,6 @@ class CarController(CarControllerBase):
       self._eucd_update_cam_stop(CC, CS)
       self.eucd_cam_relay = False
       self.eucd_cam_weight = 0.
-      self.eucd_oppose_time = 0.
-      self.eucd_slowdown_w = 0.
       long_mode = None
     self.eucd_accel = accel
 
@@ -480,7 +477,7 @@ class CarController(CarControllerBase):
 
     return [
       create_eucd_radar(self.packer, CS.eucd_stock_FSM1),
-      create_eucd_longitudinal(self.packer, CS.eucd_stock_FSM3, accel, acc_check, self._eucd_fsm3_mode(CS, accel, long_mode)),
+      create_eucd_longitudinal(self.packer, CS.eucd_stock_FSM3, accel, acc_check, self._eucd_fsm3_mode(CS, long_mode)),
     ]
 
   def _eucd_long_decision(self, CC, CS):
@@ -489,7 +486,8 @@ class CarController(CarControllerBase):
     actuators = CC.actuators
     accel = min(max(actuators.accel, CCP.EUCD_ACCEL_MIN), CCP.EUCD_ACCEL_MAX)
     cam_accel = float(CS.eucd_stock_FSM3["ACC_AccelerationRequest"])
-    accel = self._eucd_camera_slowdown(CS, accel, cam_accel)
+    accel = self._eucd_camera_brake(accel, cam_accel)
+    brake_offset = self._eucd_uphill_brake_offset(CC)
 
     self._eucd_update_cam_stop(CC, CS)
     op_brakes_more = (actuators.longControlState == LongCtrlState.pid and
@@ -507,43 +505,38 @@ class CarController(CarControllerBase):
 
     if w > 0.:
       accel = accel + w * (cam_accel - accel)
-      self.eucd_long_mode = LongMode.BRAKE if self.eucd_cam_brake else eucd_next_long_mode(self.eucd_long_mode, accel)
+      self.eucd_long_mode = LongMode.BRAKE if self.eucd_cam_brake else eucd_next_long_mode(self.eucd_long_mode, accel, brake_offset)
       self.eucd_cam_brake_honor = self.eucd_cam_brake
       return accel, self.eucd_long_mode
 
-    self.eucd_long_mode = LongMode.BRAKE if self.eucd_cam_brake_honor else eucd_next_long_mode(self.eucd_long_mode, accel)
+    self.eucd_long_mode = LongMode.BRAKE if self.eucd_cam_brake_honor else eucd_next_long_mode(self.eucd_long_mode, accel, brake_offset)
     return accel, self.eucd_long_mode
 
-  # ---- Camera slowing down ----
+  # ---- Camera rules ----
 
-  def _eucd_camera_slowdown(self, CS, accel, cam_accel):
-    """OP's accel with the camera slowing down: its hard brake at once, a milder request after the grace time
-    while OP speeds up against it (with a target). OP braking more is never limited."""
-    CCP = CarControllerParams
+  def _eucd_camera_brake(self, accel, cam_accel):
+    """The camera's hydraulic brake below CAMERA_BRAKE_HONOR_BELOW is followed at once, latched until it releases.
+    OP braking more is never limited."""
     if not self.eucd_cam_brake:
       self.eucd_cam_brake_honor = False
-    elif cam_accel < CCP.EUCD_CAMERA_BRAKE_HONOR_BELOW:
-      self.eucd_cam_brake_honor = True  # latched until the camera releases its brake
+    elif cam_accel < CarControllerParams.EUCD_CAMERA_BRAKE_HONOR_BELOW:
+      self.eucd_cam_brake_honor = True
+    return min(accel, cam_accel) if self.eucd_cam_brake_honor else accel
 
-    dt = self.EUCD_LONG_TX_PERIOD_NANOS * 1e-9
-    cam_slows = CS.eucd_acc_distance < 255 and cam_accel < CCP.EUCD_CAMERA_SLOWDOWN_ACCEL
-    self.eucd_oppose_time = self.eucd_oppose_time + dt if (cam_slows and accel > 0.) else 0.
-    follow = cam_slows and accel > 0. and (self.eucd_slowdown_w > 0. or self.eucd_oppose_time >= CCP.EUCD_CAMERA_SLOWDOWN_GRACE)
-    step = dt / CCP.EUCD_CAMERA_SLOWDOWN_RAMP
-    self.eucd_slowdown_w = min(self.eucd_slowdown_w + step, 1.) if follow else max(self.eucd_slowdown_w - step, 0.)
-
-    if self.eucd_cam_brake_honor:
-      return min(accel, cam_accel)
-    return accel - self.eucd_slowdown_w * max(accel - cam_accel, 0.)
-
-  def _eucd_fsm3_mode(self, CS, accel, long_mode):
-    """Mode written to FSM3: OP's, or the camera's BRAKE while both decelerate and OP coasts.
+  @staticmethod
+  def _eucd_fsm3_mode(CS, long_mode):
+    """Mode written to FSM3: mode 0 whenever the camera is in it, else OP's.
     FSM3 only: FSM4 and the brake-ack mask stay on OP's mode."""
-    cam_mode = int(CS.eucd_stock_FSM3["Byte_2"]) & 0x3
-    cam_accel = float(CS.eucd_stock_FSM3["ACC_AccelerationRequest"])
-    if long_mode == LongMode.COAST and cam_mode == LongMode.BRAKE and accel < 0. and cam_accel < 0.:
+    if long_mode is not None and (int(CS.eucd_stock_FSM3["Byte_2"]) & 0x3) == LongMode.BRAKE:
       return LongMode.BRAKE
     return long_mode
+
+  @staticmethod
+  def _eucd_uphill_brake_offset(CC):
+    """Uphill coast decel (<= 0, m/s^2) from the car's pitch."""
+    if len(CC.orientationNED) != 3:
+      return 0.
+    return min(-CarControllerParams.EUCD_COAST_PITCH_GAIN * math.sin(CC.orientationNED[1]), 0.)
 
   def _eucd_update_cam_stop(self, CC, CS):
     """Camera final stop behind a lead: state and blend weight, at 50 Hz."""
