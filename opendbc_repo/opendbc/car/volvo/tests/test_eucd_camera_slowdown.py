@@ -12,6 +12,8 @@ def controller():
   cc.EUCD_LONG_TX_PERIOD_NANOS = 20_000_000
   cc.eucd_oppose_time = 0.
   cc.eucd_slowdown_w = 0.
+  cc.eucd_cam_brake = False
+  cc.eucd_cam_brake_honor = False
   return cc
 
 
@@ -51,3 +53,19 @@ def test_op_braking_more_is_never_limited():
 def test_no_target_no_limit():
   cc = controller()
   assert run(cc, 5., 0.1, -0.4, distance=255) == 0.1
+
+
+def test_hard_camera_brake_followed_at_once_and_latched():
+  cc = controller()
+  cc.eucd_cam_brake = True
+  assert run(cc, DT, 0.1, CCP.EUCD_CAMERA_BRAKE_HONOR_BELOW - 0.5) == CCP.EUCD_CAMERA_BRAKE_HONOR_BELOW - 0.5
+  assert run(cc, DT, 0.1, -1.0) == -1.0  # latched while the camera brakes
+  cc.eucd_cam_brake = False
+  assert run(cc, DT, 0.1, -1.0) == 0.1   # released with the camera's brake, mild grace starts over
+
+
+def test_mild_camera_brake_ignored_during_grace():
+  cc = controller()
+  cc.eucd_cam_brake = True
+  assert run(cc, 1.0, 0.1, -1.0) == 0.1
+  assert not cc.eucd_cam_brake_honor

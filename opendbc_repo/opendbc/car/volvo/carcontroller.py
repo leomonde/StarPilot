@@ -58,11 +58,6 @@ class CarController(CarControllerBase):
     self.eucd_cam_brake_target = 0
     self.eucd_cam_mask_frames = 0
     self.eucd_brake_level_133 = 0
-    self.eucd_op_owns_acc = False
-    self.eucd_cam_was_enabled = False
-    self.eucd_fsm0_good = None
-    self.eucd_fsm3_good = {}
-    self.eucd_fsm4_good_byte2 = None
 
     self.gear_acc = 60
     self.lca_4_acc = 0  # Bresenham accumulator for 29 Hz
@@ -351,14 +346,14 @@ class CarController(CarControllerBase):
       can_sends += self._eucd_lateral(CC, CS)
 
     self._eucd_resume_buttons(CC, CS, can_sends)
-    good_fsm3 = self._eucd_relay_fsm0(CC, CS, can_sends, CS.eucd_ecm_acc_engaged)
+    self._eucd_relay_fsm0(CS, can_sends, CS.eucd_ecm_acc_engaged)
 
     if now_nanos >= self.eucd_next_long_tx_nanos:
       next_tx = self.eucd_next_long_tx_nanos + self.EUCD_LONG_TX_PERIOD_NANOS
       if self.eucd_next_long_tx_nanos == 0 or next_tx <= now_nanos:
         next_tx = now_nanos + self.EUCD_LONG_TX_PERIOD_NANOS
       self.eucd_next_long_tx_nanos = next_tx
-      can_sends += self._eucd_longitudinal(CC, CS, good_fsm3)
+      can_sends += self._eucd_longitudinal(CC, CS)
 
     can_sends += self._eucd_relay_fsm4(CC, CS)
     can_sends += self._eucd_relay_brake_acks(CC, CS)
@@ -442,27 +437,10 @@ class CarController(CarControllerBase):
   def _eucd_resume_burst(self):
     return [create_eucd_button_msg(self.packer, resume=True)] * CarControllerParams.EUCD_BUTTON_BURST
 
-  def _eucd_relay_fsm0(self, CC, CS, can_sends, ecm_engaged):
-    """FSM0 relayed 1:1; the camera's last good frame while OP owns ACC. Returns the FSM3 frame to hold, if any."""
-    CCP = CarControllerParams
-    if not ecm_engaged:
-      self.eucd_cam_was_enabled = False
+  def _eucd_relay_fsm0(self, CS, can_sends, ecm_engaged):
+    """FSM0 relayed 1:1, never ACC enabled without the ECM engaged."""
     for stock_fsm0 in CS.eucd_stock_FSM0_frames:
-      cam_ok = bool(int(stock_fsm0["Byte_2"]) & 0x04) and int(stock_fsm0["Byte_3"]) == 0
-      if cam_ok:
-        self.eucd_fsm0_good = stock_fsm0
-        self.eucd_cam_was_enabled = self.eucd_cam_was_enabled or ecm_engaged
-      takeover = CCP.EUCD_OP_OWNS_ACC_AFTER_CAMERA_ABORT and self.CP.openpilotLongitudinalControl and self.eucd_cam_was_enabled
-      self.eucd_op_owns_acc = CC.enabled and ecm_engaged and not cam_ok and self.eucd_fsm0_good is not None and takeover
-      can_sends.append(create_eucd_fsm0(self.packer, stock_fsm0, ecm_engaged, self.eucd_fsm0_good if self.eucd_op_owns_acc else None))
-    if not (ecm_engaged and CC.enabled):
-      self.eucd_op_owns_acc = False
-
-    fsm3_kind = int(CS.eucd_stock_FSM3["Byte_4"]) == 0x81
-    if not self.eucd_op_owns_acc:
-      if int(CS.eucd_stock_FSM3["Byte_6"]) == 0 and (int(CS.eucd_stock_FSM3["Byte_2"]) & 0xFC) not in (0xFC, 0xDC):
-        self.eucd_fsm3_good[fsm3_kind] = CS.eucd_stock_FSM3
-    return self.eucd_fsm3_good.get(fsm3_kind) if self.eucd_op_owns_acc else None
+      can_sends.append(create_eucd_fsm0(self.packer, stock_fsm0, ecm_engaged))
 
   def _eucd_relay_fsm4(self, CC, CS):
     """FSM4 relayed 1:1; with OP long, OP sets the brake flag and target."""
@@ -470,13 +448,10 @@ class CarController(CarControllerBase):
     fsm4_mode = self.eucd_long_mode if (CC.longActive and not self.eucd_cam_relay) else None
     for stock_fsm4 in CS.eucd_stock_FSM4_frames:
       self.eucd_cam_brake = bool(int(stock_fsm4["Byte_5"]) & 0x40)
-      if not self.eucd_op_owns_acc and int(stock_fsm4["Byte_2"]) != 0xFC:
-        self.eucd_fsm4_good_byte2 = int(stock_fsm4["Byte_2"])
-      good_byte2 = self.eucd_fsm4_good_byte2 if self.eucd_op_owns_acc else None
-      sends.append(create_eucd_fsm4(self.packer, stock_fsm4, self.eucd_accel, fsm4_mode, good_byte2, cam_weight=self.eucd_cam_weight))
+      sends.append(create_eucd_fsm4(self.packer, stock_fsm4, self.eucd_accel, fsm4_mode, cam_weight=self.eucd_cam_weight))
     return sends
 
-  def _eucd_longitudinal(self, CC, CS, good_fsm3):
+  def _eucd_longitudinal(self, CC, CS):
     """Accel and mode decision, FSM1/FSM3 sent at 50 Hz."""
     if CS.eucd_stock_FSM4_frames:
       self.eucd_cam_brake = bool(int(CS.eucd_stock_FSM4_frames[-1]["Byte_5"]) & 0x40)
@@ -505,17 +480,8 @@ class CarController(CarControllerBase):
 
     return [
       create_eucd_radar(self.packer, CS.eucd_stock_FSM1),
-      create_eucd_longitudinal(self.packer, CS.eucd_stock_FSM3, accel, acc_check, self._eucd_fsm3_mode(CS, accel, long_mode), good_fsm3),
+      create_eucd_longitudinal(self.packer, CS.eucd_stock_FSM3, accel, acc_check, self._eucd_fsm3_mode(CS, accel, long_mode)),
     ]
-
-  def _eucd_fsm3_mode(self, CS, accel, long_mode):
-    """Mode written to FSM3: OP's, or the camera's BRAKE while both decelerate and OP coasts."""
-    cam_mode = int(CS.eucd_stock_FSM3["Byte_2"]) & 0x3
-    cam_accel = float(CS.eucd_stock_FSM3["ACC_AccelerationRequest"])
-    if (CarControllerParams.EUCD_FSM3_FOLLOWS_CAMERA_BRAKE_MODE and long_mode == LongMode.COAST and
-        cam_mode == LongMode.BRAKE and accel < 0. and cam_accel < 0.):
-      return LongMode.BRAKE
-    return long_mode
 
   def _eucd_long_decision(self, CC, CS):
     """OP long active: accel and mode from OP, the camera's brake request, or the camera's final stop."""
@@ -545,29 +511,39 @@ class CarController(CarControllerBase):
       self.eucd_cam_brake_honor = self.eucd_cam_brake
       return accel, self.eucd_long_mode
 
-    if not self.eucd_cam_brake:
-      self.eucd_cam_brake_honor = False
-    elif not self.eucd_cam_brake_honor:
-      self.eucd_cam_brake_honor = not CCP.EUCD_OP_IGNORES_MILD_CAMERA_BRAKE or cam_accel < CCP.EUCD_CAMERA_BRAKE_HONOR_BELOW
-    if self.eucd_cam_brake_honor:
-      accel = min(accel, cam_accel)
-      self.eucd_long_mode = LongMode.BRAKE
-    else:
-      self.eucd_long_mode = eucd_next_long_mode(self.eucd_long_mode, accel)
+    self.eucd_long_mode = LongMode.BRAKE if self.eucd_cam_brake_honor else eucd_next_long_mode(self.eucd_long_mode, accel)
     return accel, self.eucd_long_mode
 
+  # ---- Camera slowing down ----
+
   def _eucd_camera_slowdown(self, CS, accel, cam_accel):
-    """Camera slowing down (with a target) while OP speeds up: after the grace time OP follows the camera,
-    until OP no longer wants to speed up or the camera no longer slows down."""
+    """OP's accel with the camera slowing down: its hard brake at once, a milder request after the grace time
+    while OP speeds up against it (with a target). OP braking more is never limited."""
     CCP = CarControllerParams
+    if not self.eucd_cam_brake:
+      self.eucd_cam_brake_honor = False
+    elif cam_accel < CCP.EUCD_CAMERA_BRAKE_HONOR_BELOW:
+      self.eucd_cam_brake_honor = True  # latched until the camera releases its brake
+
     dt = self.EUCD_LONG_TX_PERIOD_NANOS * 1e-9
     cam_slows = CS.eucd_acc_distance < 255 and cam_accel < CCP.EUCD_CAMERA_SLOWDOWN_ACCEL
     self.eucd_oppose_time = self.eucd_oppose_time + dt if (cam_slows and accel > 0.) else 0.
-    follow = (CCP.EUCD_CAMERA_SLOWDOWN_LIMIT and cam_slows and accel > 0. and
-              (self.eucd_slowdown_w > 0. or self.eucd_oppose_time >= CCP.EUCD_CAMERA_SLOWDOWN_GRACE))
+    follow = cam_slows and accel > 0. and (self.eucd_slowdown_w > 0. or self.eucd_oppose_time >= CCP.EUCD_CAMERA_SLOWDOWN_GRACE)
     step = dt / CCP.EUCD_CAMERA_SLOWDOWN_RAMP
     self.eucd_slowdown_w = min(self.eucd_slowdown_w + step, 1.) if follow else max(self.eucd_slowdown_w - step, 0.)
+
+    if self.eucd_cam_brake_honor:
+      return min(accel, cam_accel)
     return accel - self.eucd_slowdown_w * max(accel - cam_accel, 0.)
+
+  def _eucd_fsm3_mode(self, CS, accel, long_mode):
+    """Mode written to FSM3: OP's, or the camera's BRAKE while both decelerate and OP coasts.
+    FSM3 only: FSM4 and the brake-ack mask stay on OP's mode."""
+    cam_mode = int(CS.eucd_stock_FSM3["Byte_2"]) & 0x3
+    cam_accel = float(CS.eucd_stock_FSM3["ACC_AccelerationRequest"])
+    if long_mode == LongMode.COAST and cam_mode == LongMode.BRAKE and accel < 0. and cam_accel < 0.:
+      return LongMode.BRAKE
+    return long_mode
 
   def _eucd_update_cam_stop(self, CC, CS):
     """Camera final stop behind a lead: state and blend weight, at 50 Hz."""

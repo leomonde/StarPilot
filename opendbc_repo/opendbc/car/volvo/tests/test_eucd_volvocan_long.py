@@ -227,15 +227,10 @@ FSM0 = 0x51
 # camera frames, route 00000816: before (ACC enabled, no lead) and after its abort (0x82, code 0x10, Byte_7 bit2)
 FSM0_OK = bytes.fromhex("15e3860091955f7a")
 FSM0_ABORT = bytes.fromhex("15e3821091955f7e")
-FSM3_OK = bytes.fromhex("aa9ad40081000000")
-FSM3_ABORT_DATA = bytes.fromhex("ab9afc0081000100")
-FSM3_ABORT_TYPE = bytes.fromhex("019a000000000100")
-FSM4_ABORT = bytes.fromhex("55f1fc538fb32d00")
 
 
-def fsm0(stock: bytes, ecm_engaged: bool, good: bytes | None = None) -> bytes:
-  good_fsm0 = parse("FSM0", FSM0, 100, good) if good is not None else None
-  return volvocan.create_eucd_fsm0(CANPacker(DBC), parse("FSM0", FSM0, 100, stock), ecm_engaged, good_fsm0)[1]
+def fsm0(stock: bytes, ecm_engaged: bool) -> bytes:
+  return volvocan.create_eucd_fsm0(CANPacker(DBC), parse("FSM0", FSM0, 100, stock), ecm_engaged)[1]
 
 
 @pytest.mark.parametrize("stock", [FSM0_OK, FSM0_ABORT])
@@ -247,30 +242,6 @@ def test_fsm0_never_enabled_without_ecm():
   out = fsm0(FSM0_OK, False)
   assert out[2] == FSM0_OK[2] & ~0x04
   assert out[:2] == FSM0_OK[:2] and out[3:] == FSM0_OK[3:]
-
-
-def test_fsm0_op_owns_acc_after_camera_abort():
-  out = fsm0(FSM0_ABORT, True, FSM0_OK)
-  assert out[2] == 0x86  # enabled again, FrontCar from the live frame
-  assert out[3] == 0x00  # no fault code
-  assert out[7] == FSM0_ABORT[7] & ~0x04  # heartbeat kept, fault bit dropped
-  assert out[:2] == FSM0_ABORT[:2] and out[4:7] == FSM0_ABORT[4:7]
-
-
-@pytest.mark.parametrize("stock,base", [(FSM3_ABORT_DATA, 0xD4), (FSM3_ABORT_TYPE, 0x00)])
-def test_fsm3_op_owns_acc_after_camera_abort(stock, base):
-  fsm3 = parse("FSM3", FSM3, 50, stock)
-  good = parse("FSM3", FSM3, 50, FSM3_OK)
-  out = volvocan.create_eucd_longitudinal(CANPacker(DBC), fsm3, -1.0, 0, LongMode.BRAKE, good)[1]
-  assert out[0] & ~0x04 == FSM3_OK[0] & ~0x04  # camera's abort Byte_0 (0xAB) replaced; ACC_Check stays OP's
-  assert out[2] == base | LongMode.BRAKE
-  assert out[4] == stock[4] and out[6] == 0
-
-
-def test_fsm4_op_owns_acc_after_camera_abort():
-  out = volvocan.create_eucd_fsm4(CANPacker(DBC), parse("FSM4", FSM4, 33, FSM4_ABORT), -1.0, LongMode.BRAKE, 0x5A)[1]
-  assert out[2] == 0x5A
-  assert out[0] == FSM4_ABORT[0] and out[3:5] == FSM4_ABORT[3:5]
 
 
 ENGINE_DATA = 0x12A

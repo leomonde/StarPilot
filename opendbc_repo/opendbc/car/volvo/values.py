@@ -158,9 +158,6 @@ class CarControllerParams:
   EUCD_CAM_BRAKE_MASK_MSGS = frozenset({0x220, 0x299})
   EUCD_CAM_BRAKE_MASK_HOLD_FRAMES = int(1.0 / DT_CTRL)
 
-  # Camera brake requests: OP ignores mild ones (spoofed ack), honors them below CAMERA_BRAKE_HONOR_BELOW
-  EUCD_OP_IGNORES_MILD_CAMERA_BRAKE = True
-  EUCD_CAMERA_BRAKE_HONOR_BELOW = -2.0  # m/s^2
   EUCD_CAM_ACK_RELEASE_VALUE = 13280  # spoofed 0x299 ack drops when the camera's FSM4 target reaches this (no braking)
 
   # Camera final stop behind a lead
@@ -171,19 +168,15 @@ class CarControllerParams:
   EUCD_OP_BRAKE_OVERRIDE_ACCEL = -0.3  # m/s^2, OP brakes if it wants less than this and the camera does not brake
   EUCD_OP_BRAKE_OVERRIDE_MARGIN = 1.0  # m/s^2, OP brakes if it wants this much more than the camera
 
-  # FSM3 shows the camera's BRAKE mode while both decelerate and OP coasts (routes 849/84b: the camera
-  # aborted after ~4 s of its BRAKE vs OP's COAST). FSM3 only: FSM4 and the brake-ack mask stay on COAST.
-  EUCD_FSM3_FOLLOWS_CAMERA_BRAKE_MODE = True
-
-  # OP may speed up against the camera only briefly: with a target, camera slowing down and OP speeding up for
-  # the grace time, OP's accel is brought to the camera's (route 852: the camera aborted after 3 s of this)
-  EUCD_CAMERA_SLOWDOWN_LIMIT = True
-  EUCD_CAMERA_SLOWDOWN_ACCEL = -0.15  # m/s^2, camera "slowing down" below this
-  EUCD_CAMERA_SLOWDOWN_GRACE = 1.5    # s of disagreement before following the camera
-  EUCD_CAMERA_SLOWDOWN_RAMP = 0.5     # s, blend in and out
-
-  # Keep the ECM engaged on the camera's last good frames after a camera abort (latched a fault in testing)
-  EUCD_OP_OWNS_ACC_AFTER_CAMERA_ABORT = False
+  # Camera slowing down. The camera aborts if the car keeps ignoring it, so OP follows it:
+  # - its hydraulic brake below CAMERA_BRAKE_HONOR_BELOW at once (milder ones: ignored, ack spoofed)
+  # - a milder request with a target, after CAMERA_SLOWDOWN_GRACE of OP speeding up (route 852 aborted after 3 s)
+  # - FSM3 shows its BRAKE mode while both decelerate (routes 849/84b aborted after ~4 s of BRAKE vs COAST)
+  # OP braking more than the camera is never limited.
+  EUCD_CAMERA_BRAKE_HONOR_BELOW = -2.0  # m/s^2
+  EUCD_CAMERA_SLOWDOWN_ACCEL = -0.15    # m/s^2, a milder request counts below this
+  EUCD_CAMERA_SLOWDOWN_GRACE = 1.5      # s
+  EUCD_CAMERA_SLOWDOWN_RAMP = 0.5       # s, blend in and out
 
 
 class CANBUS:
