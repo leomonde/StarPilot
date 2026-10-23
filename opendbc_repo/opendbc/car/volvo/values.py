@@ -175,6 +175,13 @@ class CarControllerParams:
   # aborted after ~4 s of its BRAKE vs OP's COAST). FSM3 only: FSM4 and the brake-ack mask stay on COAST.
   EUCD_FSM3_FOLLOWS_CAMERA_BRAKE_MODE = True
 
+  # OP may speed up against the camera only briefly: with a target, camera slowing down and OP speeding up for
+  # the grace time, OP's accel is brought to the camera's (route 852: the camera aborted after 3 s of this)
+  EUCD_CAMERA_SLOWDOWN_LIMIT = True
+  EUCD_CAMERA_SLOWDOWN_ACCEL = -0.15  # m/s^2, camera "slowing down" below this
+  EUCD_CAMERA_SLOWDOWN_GRACE = 1.5    # s of disagreement before following the camera
+  EUCD_CAMERA_SLOWDOWN_RAMP = 0.5     # s, blend in and out
+
   # Keep the ECM engaged on the camera's last good frames after a camera abort (latched a fault in testing)
   EUCD_OP_OWNS_ACC_AFTER_CAMERA_ABORT = False
 

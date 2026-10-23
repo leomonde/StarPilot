@@ -52,6 +52,8 @@ class CarController(CarControllerBase):
     self.eucd_cam_stop_w = 0.
     self.eucd_cam_relay = False
     self.eucd_cam_weight = 0.
+    self.eucd_oppose_time = 0.  # s of camera slowing down vs OP speeding up
+    self.eucd_slowdown_w = 0.   # 1 = OP's accel limited to the camera's
     self.eucd_spoof_cam_ack = False
     self.eucd_cam_brake_target = 0
     self.eucd_cam_mask_frames = 0
@@ -487,6 +489,8 @@ class CarController(CarControllerBase):
       self._eucd_update_cam_stop(CC, CS)
       self.eucd_cam_relay = False
       self.eucd_cam_weight = 0.
+      self.eucd_oppose_time = 0.
+      self.eucd_slowdown_w = 0.
       long_mode = None
     self.eucd_accel = accel
 
@@ -519,6 +523,7 @@ class CarController(CarControllerBase):
     actuators = CC.actuators
     accel = min(max(actuators.accel, CCP.EUCD_ACCEL_MIN), CCP.EUCD_ACCEL_MAX)
     cam_accel = float(CS.eucd_stock_FSM3["ACC_AccelerationRequest"])
+    accel = self._eucd_camera_slowdown(CS, accel, cam_accel)
 
     self._eucd_update_cam_stop(CC, CS)
     op_brakes_more = (actuators.longControlState == LongCtrlState.pid and
@@ -550,6 +555,19 @@ class CarController(CarControllerBase):
     else:
       self.eucd_long_mode = eucd_next_long_mode(self.eucd_long_mode, accel)
     return accel, self.eucd_long_mode
+
+  def _eucd_camera_slowdown(self, CS, accel, cam_accel):
+    """Camera slowing down (with a target) while OP speeds up: after the grace time OP follows the camera,
+    until OP no longer wants to speed up or the camera no longer slows down."""
+    CCP = CarControllerParams
+    dt = self.EUCD_LONG_TX_PERIOD_NANOS * 1e-9
+    cam_slows = CS.eucd_acc_distance < 255 and cam_accel < CCP.EUCD_CAMERA_SLOWDOWN_ACCEL
+    self.eucd_oppose_time = self.eucd_oppose_time + dt if (cam_slows and accel > 0.) else 0.
+    follow = (CCP.EUCD_CAMERA_SLOWDOWN_LIMIT and cam_slows and accel > 0. and
+              (self.eucd_slowdown_w > 0. or self.eucd_oppose_time >= CCP.EUCD_CAMERA_SLOWDOWN_GRACE))
+    step = dt / CCP.EUCD_CAMERA_SLOWDOWN_RAMP
+    self.eucd_slowdown_w = min(self.eucd_slowdown_w + step, 1.) if follow else max(self.eucd_slowdown_w - step, 0.)
+    return accel - self.eucd_slowdown_w * max(accel - cam_accel, 0.)
 
   def _eucd_update_cam_stop(self, CC, CS):
     """Camera final stop behind a lead: state and blend weight, at 50 Hz."""
