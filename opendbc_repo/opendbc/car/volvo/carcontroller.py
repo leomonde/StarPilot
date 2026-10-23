@@ -487,7 +487,7 @@ class CarController(CarControllerBase):
     accel = min(max(actuators.accel, CCP.EUCD_ACCEL_MIN), CCP.EUCD_ACCEL_MAX)
     cam_accel = float(CS.eucd_stock_FSM3["ACC_AccelerationRequest"])
     accel = self._eucd_camera_brake(accel, cam_accel)
-    brake_offset = self._eucd_uphill_brake_offset(CC)
+    brake_offset = self._eucd_slope_brake_offset(CC)
 
     self._eucd_update_cam_stop(CC, CS)
     op_brakes_more = (actuators.longControlState == LongCtrlState.pid and
@@ -532,11 +532,12 @@ class CarController(CarControllerBase):
     return long_mode
 
   @staticmethod
-  def _eucd_uphill_brake_offset(CC):
-    """Uphill coast decel (<= 0, m/s^2) from the car's pitch."""
+  def _eucd_slope_brake_offset(CC):
+    """Slope part of the coast accel (m/s^2) from the car's pitch: < 0 uphill, > 0 (capped) downhill."""
     if len(CC.orientationNED) != 3:
       return 0.
-    return min(-CarControllerParams.EUCD_COAST_PITCH_GAIN * math.sin(CC.orientationNED[1]), 0.)
+    CCP = CarControllerParams
+    return min(-CCP.EUCD_COAST_PITCH_GAIN * math.sin(CC.orientationNED[1]), CCP.EUCD_DOWNHILL_BRAKE_OFFSET_MAX)
 
   def _eucd_update_cam_stop(self, CC, CS):
     """Camera final stop behind a lead: state and blend weight, at 50 Hz."""

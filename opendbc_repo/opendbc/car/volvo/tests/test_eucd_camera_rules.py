@@ -57,7 +57,7 @@ def test_fsm3_untouched_without_op_mode():
 
 
 def offset(pitch_deg):
-  return CarController._eucd_uphill_brake_offset(SimpleNamespace(orientationNED=[0., math.radians(pitch_deg), 0.]))
+  return CarController._eucd_slope_brake_offset(SimpleNamespace(orientationNED=[0., math.radians(pitch_deg), 0.]))
 
 
 def test_uphill_coast_is_not_braking():
@@ -67,7 +67,15 @@ def test_uphill_coast_is_not_braking():
   assert eucd_next_long_mode(LongMode.COAST, -1.2, offset(5.4)) == LongMode.BRAKE
 
 
-def test_flat_and_downhill_unchanged():
+def test_downhill_brakes_earlier():
+  # route 85a: on a 1.5 deg descent a -0.4 request coasted and the car sped up
+  assert eucd_next_long_mode(LongMode.COAST, -0.4) == LongMode.COAST
+  assert eucd_next_long_mode(LongMode.COAST, -0.4, offset(-1.5)) == LongMode.BRAKE
+  assert offset(-10.) == CCP.EUCD_DOWNHILL_BRAKE_OFFSET_MAX
+  # BRAKE exit stays at or below 0, so OP asking to speed up always leaves BRAKE
+  assert eucd_next_long_mode(LongMode.BRAKE, 0.01, offset(-10.)) == LongMode.COAST
+
+
+def test_flat_unchanged():
   assert offset(0.) == 0.
-  assert offset(-5.) == 0.
-  assert CarController._eucd_uphill_brake_offset(SimpleNamespace(orientationNED=[])) == 0.
+  assert CarController._eucd_slope_brake_offset(SimpleNamespace(orientationNED=[])) == 0.

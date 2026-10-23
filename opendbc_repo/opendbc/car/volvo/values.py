@@ -172,8 +172,10 @@ class CarControllerParams:
   # so FSM3 shows mode 0 whenever the camera does (mode bits only: FSM4 decides the hydraulic brake).
   # Its hydraulic brake below CAMERA_BRAKE_HONOR_BELOW is followed at once (milder ones: ignored, ack spoofed).
   EUCD_CAMERA_BRAKE_HONOR_BELOW = -2.0  # m/s^2
-  # Uphill, coasting already decelerates: the BRAKE mode thresholds move down by it (route 858 braked on a 5° slope)
+  # BRAKE mode thresholds follow what coasting gives on the slope: lower uphill (route 858 braked on a 5° slope),
+  # higher downhill (route 85a coasted 3-7 km/h over the limit on a 1.5° descent)
   EUCD_COAST_PITCH_GAIN = 5.65  # m/s^2 per sin(pitch), openpilot's coast fit
+  EUCD_DOWNHILL_BRAKE_OFFSET_MAX = 0.15  # m/s^2, keeps BRAKE exit (-0.15 + this) at or below 0
 
 
 class CANBUS:
