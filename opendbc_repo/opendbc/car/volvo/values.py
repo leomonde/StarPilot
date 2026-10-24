@@ -176,6 +176,9 @@ class CarControllerParams:
   # higher downhill (route 85a coasted 3-7 km/h over the limit on a 1.5° descent)
   EUCD_COAST_PITCH_GAIN = 5.65  # m/s^2 per sin(pitch), openpilot's coast fit
   EUCD_DOWNHILL_BRAKE_OFFSET_MAX = 0.15  # m/s^2, keeps BRAKE exit (-0.15 + this) at or below 0
+  # Uphill, BRAKE is entered this much further below coast: OP's request overshoots the coast cap a little
+  # (route 85b, 5° climb: -1.1 vs -0.8 coast, hydraulic brake jerks)
+  EUCD_UPHILL_BRAKE_ENTER_EXTRA = 0.6  # fraction of the uphill offset
 
 
 class CANBUS:

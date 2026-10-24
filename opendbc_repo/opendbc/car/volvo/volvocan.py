@@ -579,7 +579,8 @@ def eucd_next_long_mode(mode: LongMode, accel: float, brake_offset: float = 0.) 
   elif mode == LongMode.DRIVE:
     if accel >= CCP.EUCD_DRIVE_EXIT:
       return LongMode.DRIVE
-  if accel < CCP.EUCD_BRAKE_ENTER + brake_offset:
+  enter_offset = brake_offset * (1. + CCP.EUCD_UPHILL_BRAKE_ENTER_EXTRA) if brake_offset < 0. else brake_offset
+  if accel < CCP.EUCD_BRAKE_ENTER + enter_offset:
     return LongMode.BRAKE
   if accel > CCP.EUCD_DRIVE_ENTER:
     return LongMode.DRIVE

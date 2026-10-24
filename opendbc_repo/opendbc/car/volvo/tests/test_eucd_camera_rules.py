@@ -64,7 +64,15 @@ def test_uphill_coast_is_not_braking():
   # route 858: -0.84 requested on a 5.4 deg slope is just coasting
   assert eucd_next_long_mode(LongMode.COAST, -0.84) == LongMode.BRAKE
   assert eucd_next_long_mode(LongMode.COAST, -0.84, offset(5.4)) == LongMode.COAST
-  assert eucd_next_long_mode(LongMode.COAST, -1.2, offset(5.4)) == LongMode.BRAKE
+  assert eucd_next_long_mode(LongMode.COAST, -1.5, offset(5.4)) == LongMode.BRAKE
+
+
+def test_uphill_coast_overshoot_is_not_braking():
+  # route 85b: the coast cap (-0.8) overshot to -1.15 on a 5 deg climb
+  assert eucd_next_long_mode(LongMode.COAST, -1.15, offset(5.0)) == LongMode.COAST
+  assert eucd_next_long_mode(LongMode.COAST, -1.6, offset(5.0)) == LongMode.BRAKE
+  # once braking, it holds down to the usual exit
+  assert eucd_next_long_mode(LongMode.BRAKE, -0.8, offset(5.0)) == LongMode.BRAKE
 
 
 def test_downhill_brakes_earlier():
