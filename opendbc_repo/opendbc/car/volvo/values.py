@@ -190,6 +190,13 @@ class CarControllerParams:
   EUCD_COAST_TOLERANCE_LEAD_GAP = 2.5    # s
   EUCD_COAST_TOLERANCE_AT_SET = 1. * CV.KPH_TO_MS  # counts as cruising at the set speed from this much below it
 
+  # Accel request ramps (jerk limits), like Toyota's +-4 m/s^3 and Ford's 3.5 m/s^3 brake onset: OP's request
+  # steps (route 865: +1.3 -> -0.4 in 0.5 s while following a departing lead) reach the ECM as ramps.
+  # The camera's hard brake (CAMERA_BRAKE_HONOR_BELOW) and its final stop are not limited.
+  EUCD_JERK_UP = 2.0          # m/s^3, accel rising
+  EUCD_JERK_DOWN_LIFT = 2.5   # m/s^3, accel falling while still positive (lifting off)
+  EUCD_JERK_DOWN_BRAKE = 4.0  # m/s^3, accel falling at or below 0 (braking deeper)
+
 
 class CANBUS:
   pt = 0

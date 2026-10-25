@@ -485,6 +485,7 @@ class CarController(CarControllerBase):
     CCP = CarControllerParams
     actuators = CC.actuators
     accel = min(max(actuators.accel, CCP.EUCD_ACCEL_MIN), CCP.EUCD_ACCEL_MAX)
+    accel = self._eucd_jerk_limit(accel, self.eucd_accel)
     cam_accel = float(CS.eucd_stock_FSM3["ACC_AccelerationRequest"])
     accel = self._eucd_camera_brake(accel, cam_accel)
     brake_offset = self._eucd_slope_brake_offset(CC)
@@ -517,6 +518,13 @@ class CarController(CarControllerBase):
         mode = LongMode.COAST
       self.eucd_long_mode = mode
     return accel, self.eucd_long_mode
+
+  def _eucd_jerk_limit(self, accel, last_accel):
+    """OP's request reaches the ECM as a ramp: EUCD_JERK_UP rising, EUCD_JERK_DOWN_LIFT / _BRAKE falling."""
+    CCP = CarControllerParams
+    dt = self.EUCD_LONG_TX_PERIOD_NANOS * 1e-9
+    down = CCP.EUCD_JERK_DOWN_LIFT if last_accel > 0. else CCP.EUCD_JERK_DOWN_BRAKE
+    return min(max(accel, last_accel - down * dt), last_accel + CCP.EUCD_JERK_UP * dt)
 
   # ---- Camera rules ----
 

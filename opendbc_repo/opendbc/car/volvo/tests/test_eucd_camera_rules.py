@@ -114,3 +114,24 @@ def test_coast_tolerance_downhill_over_set():
   assert not tolerance(112., accel=-1.2)     # strong request
   assert not tolerance(112., lead_m=40)      # camera target closer than 2.5 s
   assert tolerance(112., lead_m=120)
+
+
+def limited(accel, last):
+  cc = CarController.__new__(CarController)
+  cc.EUCD_LONG_TX_PERIOD_NANOS = 20_000_000
+  return cc._eucd_jerk_limit(accel, last)
+
+
+def test_jerk_limit_ramps():
+  dt = 0.02
+  assert abs(limited(1.3, 0.0) - CCP.EUCD_JERK_UP * dt) < 1e-9             # rising
+  assert abs(limited(-0.4, 1.3) - (1.3 - CCP.EUCD_JERK_DOWN_LIFT * dt)) < 1e-9  # lifting off
+  assert abs(limited(-3.5, -1.0) - (-1.0 - CCP.EUCD_JERK_DOWN_BRAKE * dt)) < 1e-9  # braking deeper
+  assert limited(0.31, 0.3) == 0.31                                        # small steps pass
+
+
+def test_jerk_limit_reaches_target():
+  a = 1.3
+  for _ in range(100):
+    a = limited(-0.4, a)
+  assert a == -0.4
