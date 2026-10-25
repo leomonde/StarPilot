@@ -5,21 +5,17 @@ from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.interfaces import RadarInterfaceBase
 from opendbc.car.volvo.values import CANBUS, DBC
 
-# Delphi ESR 2.5: 64 track slots at 0x500..0x53F, 20Hz, on CANBUS.body (bus 1).
-# The comma harness taps the FLR->FSM private CAN, exposing the raw stream to OP.
+# Delphi ESR 2.5: 64 tracks at 0x500..0x53F, 20 Hz, bus 1
 DELPHI_ESR_TRACK_ADDRS = list(range(0x500, 0x540))  # Target1..Target64
 DELPHI_ESR_TRACK_NAMES = [f"Target{i}" for i in range(1, 65)]
-# Pair (addr, name) so we can key state by address (what CANParser reports in
-# its update-returns-set) and still read signals by message name via vl[name].
+# (addr, name) pairs
 TRACK_ADDR_NAMES = list(zip(DELPHI_ESR_TRACK_ADDRS, DELPHI_ESR_TRACK_NAMES, strict=True))
 TRIGGER_MSG_ADDR = DELPHI_ESR_TRACK_ADDRS[-1]
 
-# ESR CAN_TX_TRACK_STATUS codes. 0 = no target. 6 = invalid coasted.
-# Everything else represents a real or recently-real track.
+# Track status: 0 no target, 6 invalid coasted
 INVALID_STATUSES = {0, 6}
 
-# A track needs this many consecutive valid frames before we surface it to the
-# planner. Suppresses one-off ghosts without adding meaningful latency (20Hz).
+# Consecutive valid frames before a track is published
 MIN_VALID_CNT = 3
 
 
@@ -42,8 +38,7 @@ class RadarInterface(RadarInterfaceBase):
 
     self.updated_messages.update(self.rcp.update(can_strings))
 
-    # ESR sends all 64 slots every 50ms. Wait for the last slot before publishing
-    # so consumers see a full sweep rather than partial updates.
+    # Publish after the last slot of a sweep
     if TRIGGER_MSG_ADDR not in self.updated_messages:
       return None
     self.updated_messages.clear()
@@ -63,15 +58,14 @@ class RadarInterface(RadarInterfaceBase):
       else:
         self.valid_cnt[addr] = max(self.valid_cnt[addr] - 1, 0)
 
-      # Only write track data when valid; keep last good reading on flicker to avoid
-      # garbage points (dRel=0, vRel saturates to +-81.91) leaking to the planner.
+      # Keep the last good reading on flicker
       if valid and self.valid_cnt[addr] >= MIN_VALID_CNT:
         if addr not in self.pts:
           self.pts[addr] = structs.RadarData.RadarPoint()
           self.pts[addr].trackId = self.track_id
           self.track_id += 1
         angle_rad = cpt["CAN_TX_TRACK_ANGLE"] * CV.DEG_TO_RAD
-        # ESR angle positive = target right of boresight; flip sin() for left-positive yRel.
+        # Flip the ESR angle for left-positive yRel
         self.pts[addr].dRel = rng * cos(angle_rad)
         self.pts[addr].yRel = -rng * sin(angle_rad)
         self.pts[addr].vRel = cpt["CAN_TX_TRACK_RANGE_RATE"]

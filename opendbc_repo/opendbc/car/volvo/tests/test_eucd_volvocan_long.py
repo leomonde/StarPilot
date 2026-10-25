@@ -47,7 +47,7 @@ def test_relay_is_byte_identical(kind, mode, stock):
 
 @pytest.mark.parametrize("kind,mode,stock", ALL_FRAMES)
 def test_stock_mode_and_traction_reproduce_frame(kind, mode, stock):
-  # feeding the camera's own mode back must not touch Byte_2; BRAKE frames also match Byte_3 (always 0)
+  # Camera's own mode leaves Byte_2 untouched
   out = build(stock, mode=mode)
   assert out[2] == stock[2]
   assert out[:2] == stock[:2] and out[4:] == stock[4:]
@@ -84,7 +84,7 @@ def test_mode_hysteresis():
   assert m == LongMode.COAST
   m = volvocan.eucd_next_long_mode(m, CCP.EUCD_BRAKE_ENTER - 0.01)
   assert m == LongMode.BRAKE
-  m = volvocan.eucd_next_long_mode(m, CCP.EUCD_BRAKE_EXIT - 0.05)  # stays braking until accel back to BRAKE_EXIT
+  m = volvocan.eucd_next_long_mode(m, CCP.EUCD_BRAKE_EXIT - 0.05)  # stays braking until BRAKE_EXIT
   assert m == LongMode.BRAKE
   m = volvocan.eucd_next_long_mode(m, CCP.EUCD_BRAKE_EXIT + 0.05)
   assert m == LongMode.COAST
@@ -94,7 +94,7 @@ def test_mode_hysteresis():
   assert m == LongMode.DRIVE
   m = volvocan.eucd_next_long_mode(m, 0.05)
   assert m == LongMode.DRIVE
-  m = volvocan.eucd_next_long_mode(m, -1.0)  # hard brake request goes straight from DRIVE to BRAKE
+  m = volvocan.eucd_next_long_mode(m, -1.0)  # hard brake: DRIVE straight to BRAKE
   assert m == LongMode.BRAKE
   m = volvocan.eucd_next_long_mode(m, 1.0)
   assert m == LongMode.DRIVE
@@ -127,12 +127,12 @@ def test_fsm4_op_brake_sets_value_from_accel(stock, accel):
 
 
 def test_fsm4_brake_value_matches_stock_levels():
-  # high byte reproduces the stock camera Byte_5 levels: F0 at -3.5, F4 near 0 (808)
+  # Matches the stock Byte_5 levels
   assert volvocan.eucd_fsm4_brake_value(-3.5, True) >> 8 == 0xF0
   assert volvocan.eucd_fsm4_brake_value(0.0, True) >> 8 == 0xF4
   values = [volvocan.eucd_fsm4_brake_value(a / 10, True) for a in range(-40, 5)]
   assert values == sorted(values)  # stronger decel, lower value
-  # smooth like stock (~1 count/frame): a 0.02 m/s^2 step moves it by a few counts, never a byte jump
+  # Smooth: a small step moves a few counts
   assert all(abs(volvocan.eucd_fsm4_brake_value(a / 50, True) - volvocan.eucd_fsm4_brake_value((a + 1) / 50, True)) < 16 for a in range(-200, 10))
 
 
@@ -167,7 +167,7 @@ def test_fsm1_brake_bit_follows_op(stock, mode):
 
 MSG_323 = 0x323
 MSG_133 = 0x133
-# stock car frames, route 00000807: 0x323 Byte_4 0xC5 normal / 0xD5 brake acknowledge / 0xE5; 0x133 Byte_1 0x14 / 0x2D (braking)
+# Stock 0x323 Byte_4 and 0x133 Byte_1, route 807
 STOCK_323 = ["0000fc04c5800400", "0000fc04d5800400", "0000fc04e5800400"]
 STOCK_133 = ["0b146e3cce370719", "0b2d6df6cdf60732"]
 
@@ -200,7 +200,7 @@ def test_133_mask_holds_brake_level(stock):
 
 MSG_220 = 0x220
 MSG_299 = 0x299
-# stock car frames, route 00000816: 0x220 Byte_2 0xE0 / 0xE4 (brake request active); 0x299 Byte_5 0xFF / 0xF7 (acknowledge)
+# Stock 0x220 Byte_2 and 0x299 Byte_5, route 816
 STOCK_220 = ["8b11e000a2577a30", "8b11e400a245a216", "8b11e500a1f6a1d3"]
 STOCK_299 = ["40054c020dff2235", "4005480201f72239"]
 
@@ -224,7 +224,7 @@ def test_299_relay_to_camera(stock, mask):
 
 
 FSM0 = 0x51
-# camera frames, route 00000816: before (ACC enabled, no lead) and after its abort (0x82, code 0x10, Byte_7 bit2)
+# Camera FSM0 before and after an abort, route 816
 FSM0_OK = bytes.fromhex("15e3860091955f7a")
 FSM0_ABORT = bytes.fromhex("15e3821091955f7e")
 
@@ -247,7 +247,7 @@ def test_fsm0_never_enabled_without_ecm():
 ENGINE_DATA = 0x12A
 
 
-# stock car frames (route 823 / 821): Byte_4 0xA8 standby, 0x98 just turned off, 0xB8 engaged
+# Stock 0x12A Byte_4: 0xA8 standby, 0x98 off, 0xB8 engaged
 @pytest.mark.parametrize("b4,state", [(0xA8, EcmAccState.STANDBY), (0x98, EcmAccState.OFF), (0xB8, EcmAccState.ENGAGED)])
 def test_ecm_acc_state_decoding(b4, state):
   dat = bytes([0xEA, 0x00, 0xC7, 0xF8, b4, 0xF8, 0xE5, 0x7A])
@@ -255,7 +255,7 @@ def test_ecm_acc_state_decoding(b4, state):
 
 
 def test_cam_brake_mask_msgs_are_relayed_messages():
-  # only messages carcontroller relays to the camera can be masked
+  # Only relayed messages can be masked
   assert CarControllerParams.EUCD_CAM_BRAKE_MASK_MSGS <= {0x133, 0x323, 0x220, 0x299}
 
 

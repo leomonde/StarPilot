@@ -54,7 +54,7 @@ def test_fsm3_keeps_op_mode_otherwise(cam_mode, op_mode):
 
 @pytest.mark.parametrize("cam_mode", [LongMode.COAST, LongMode.DRIVE])
 def test_fsm3_mode_0_for_mild_decel(cam_mode):
-  # route 863: in coast the ECM undershoots mild decel requests
+  # Coast undershoots mild decel
   assert CarController._eucd_fsm3_mode(fsm3(cam_mode), -0.2, LongMode.COAST) == LongMode.BRAKE
   assert CarController._eucd_fsm3_mode(fsm3(cam_mode), -0.02, LongMode.COAST) == LongMode.COAST
 
@@ -68,26 +68,26 @@ def offset(pitch_deg):
 
 
 def test_uphill_coast_is_not_braking():
-  # route 858: -0.84 requested on a 5.4 deg slope is just coasting
+  # Coast on a 5.4 deg climb is not braking
   assert eucd_next_long_mode(LongMode.COAST, -0.84) == LongMode.BRAKE
   assert eucd_next_long_mode(LongMode.COAST, -0.84, offset(5.4)) == LongMode.COAST
   assert eucd_next_long_mode(LongMode.COAST, -1.5, offset(5.4)) == LongMode.BRAKE
 
 
 def test_uphill_coast_overshoot_is_not_braking():
-  # route 85b: the coast cap (-0.8) overshot to -1.15 on a 5 deg climb
+  # Coast-cap overshoot on a 5 deg climb
   assert eucd_next_long_mode(LongMode.COAST, -1.15, offset(5.0)) == LongMode.COAST
   assert eucd_next_long_mode(LongMode.COAST, -1.6, offset(5.0)) == LongMode.BRAKE
-  # once braking, it holds down to the usual exit
+  # Holds down to the usual exit
   assert eucd_next_long_mode(LongMode.BRAKE, -0.8, offset(5.0)) == LongMode.BRAKE
 
 
 def test_downhill_brakes_earlier():
-  # route 85a: on a 1.5 deg descent a -0.4 request coasted and the car sped up
+  # Downhill brakes earlier
   assert eucd_next_long_mode(LongMode.COAST, -0.4) == LongMode.COAST
   assert eucd_next_long_mode(LongMode.COAST, -0.4, offset(-1.5)) == LongMode.BRAKE
   assert offset(-10.) == CCP.EUCD_DOWNHILL_BRAKE_OFFSET_MAX
-  # BRAKE exit stays at or below 0, so OP asking to speed up always leaves BRAKE
+  # BRAKE exit stays at or below 0
   assert eucd_next_long_mode(LongMode.BRAKE, 0.01, offset(-10.)) == LongMode.COAST
 
 
@@ -109,10 +109,10 @@ def test_coast_tolerance_downhill_over_set():
   assert tolerance(110.5)
   assert tolerance(114.)
   assert not tolerance(115.5)          # above set + 5: brakes
-  assert not tolerance(90.)            # SLC (or a lead) holds the car below the set: no tolerance
+  assert not tolerance(90.)  # held below the set: no tolerance
   assert not tolerance(112., pitch_deg=0.)   # flat
   assert not tolerance(112., accel=-1.2)     # strong request
-  assert not tolerance(112., lead_m=40)      # camera target closer than 2.5 s
+  assert not tolerance(112., lead_m=40)  # camera target closer than 2.5 s
   assert tolerance(112., lead_m=120)
 
 

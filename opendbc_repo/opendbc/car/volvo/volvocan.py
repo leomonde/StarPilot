@@ -49,31 +49,11 @@ def create_c1_cancel(packer):
 def create_lca_message(packer, lat_active: bool, apply_angle: float, msg_lca: dict,
                        authority_pos: int = 614, authority_neg: int = -614,
                        overrides: dict | None = None):
-  """
-  Create LCA (Lane Centering Assist) steering command for Volvo CMA platform.
-  Uses angle-based control via the LCA_STEER signal.
-
-  NOTE: This message must be sent continuously (even when inactive) because
-  stock LCA is permanently blocked by panda safety. When lat_active=False,
-  we send a safe/inactive LCA message to maintain PSCM communication.
-
-  Args:
-    packer: CAN packer instance
-    lat_active: Whether lateral control is active
-    apply_angle: Steering angle in degrees (positive = left, negative = right)
-    msg_lca: Dictionary containing LCA message values
-    authority_pos: LCA_STEER_LOOSELY value [0..614] — right-pull torque-authority
-                   envelope. Saturated (614) for stock-equivalent stiff feel; the
-                   carcontroller envelope tracker collapses this on driver override
-                   and rebuilds slowly to reproduce stock PA's easy-override feel.
-    authority_neg: LCA_STEER_LOOSELY_INV value [-614..0] — left-pull authority.
-    overrides: Optional dict of signal overrides (keys are UPPERCASE DBC signal names)
-  """
+  """LCA (0x58) angle steering command, sent every frame."""
   if not lat_active:
     return packer.make_can_msg('LCA', 2, msg_lca)
 
-  # In openpilot, a positive angle corresponds to a LEFT turn.
-  # In Volvo, a positive LCA_STEER value corresponds to a LEFT turn.
+  # Positive angle is a left turn in both openpilot and Volvo
 
   values = {
     'NEW_SIGNAL_1': 3,
@@ -82,13 +62,13 @@ def create_lca_message(packer, lat_active: bool, apply_angle: float, msg_lca: di
     'LCA_STEER_LOOSELY': int(authority_pos) if lat_active else 0,
     'NEW_SIGNAL_7': 7,
     'LCA_STEER_LOOSELY_INV': int(authority_neg) if lat_active else 0,
-    # Steering rate - Stock LCA increased from 35 to 39 steppedly when steering request was overridden by openpilot that couldn't steer enough
+    # Steering rate
     'LCA_RATE_OF_CHANGE': 80 if lat_active else 251,
     'LCA_STEER': msg_lca['LCA_STEER'],
     'NEW_SIGNAL_6': 15,
   }
 
-  # Apply any overrides from live testing config
+  # Live-tuning overrides
   if overrides:
     for key, val in overrides.items():
       values[key] = val
@@ -107,26 +87,15 @@ def create_pscm_message(packer, lat_active: bool, msg_pscm: dict, frame: int):
     'BYTE_7': msg_pscm['BYTE_7'],
   }
 
-  # Spoof hands on wheel while openpilot is actively steering, so the stock EPS
-  # doesn't fault/nag on torque that didn't come from a human.
+  # Spoof hands on wheel while openpilot steers
   if lat_active:
-    values['HANDS_ON_STEERING_WHEEL_B'] = 186 if frame % 2 == 0 else 154 # msg_pscm['HANDS_ON_STEERING_WHEEL_B']
-    values['HANDS_ON_STEERING_WHEEL_A'] = 195 if frame % 2 == 0 else 249 # msg_pscm['HANDS_ON_STEERING_WHEEL_A']
+    values['HANDS_ON_STEERING_WHEEL_B'] = 186 if frame % 2 == 0 else 154  # stock HANDS_ON_STEERING_WHEEL_B
+    values['HANDS_ON_STEERING_WHEEL_A'] = 195 if frame % 2 == 0 else 249  # stock HANDS_ON_STEERING_WHEEL_A
 
   return packer.make_can_msg('PSCM', 0, values)
 
 def create_lca_3_message(packer, lat_active: bool, apply_angle: float, msg_lca_3: dict, counter_value: int):
-  """
-  Create LCA_3 message for Volvo CMA platform.
-  This message enables PSCM to accept LCA commands.
-
-  Args:
-    packer: CAN packer instance
-    lat_active: Whether lateral control is active
-    apply_angle: Steering angle in degrees (used for direction indicator)
-    msg_lca_3: Dictionary containing LCA_3 message values
-    counter_value: Counter value to use (from pattern or stock)
-  """
+  """LCA_3 message, lets the PSCM accept LCA commands."""
   values = {
     'NEW_SIGNAL_3': 0 if lat_active else msg_lca_3['NEW_SIGNAL_3'],
     'LCA_ACCEPT_COMMANDS_RELATED': 15 if lat_active else msg_lca_3['LCA_ACCEPT_COMMANDS_RELATED'],
@@ -158,19 +127,7 @@ def diff_dicts(a, b):
   }
 
 def create_lca_2_message(packer, lat_active: bool, msg_lca_2: dict, counter_1: int, counter_2: int):
-  """
-  Create LCA_2 message to spoof PILOT_ASSIST_ENGAGED when openpilot is active.
-
-  When lat_active=True, we set PILOT_ASSIST_ENGAGED=1 to make PSCM accept LCA commands,
-  even if the driver has disabled stock Pilot Assist.
-
-  Args:
-    packer: CAN packer instance
-    lat_active: Whether lateral control is active
-    msg_lca_2: Dictionary containing LCA_2 message values from car
-    counter_1: Managed COUNTER_1 value (increments by +2 mod 16)
-    counter_2: Managed COUNTER_2 value (increments by +4 mod 16)
-  """
+  """LCA_2 message, spoofs PILOT_ASSIST_ENGAGED while active."""
   #return packer.make_can_msg('LCA_2', 2, msg_lca_2)
   #if not lat_active:
   #  return packer.make_can_msg('LCA_2', 2, msg_lca_2)
@@ -178,25 +135,25 @@ def create_lca_2_message(packer, lat_active: bool, msg_lca_2: dict, counter_1: i
   #values = dict(msg_lca_2)
 
   values = {
-    'BYTE_0': 24 if lat_active else msg_lca_2['BYTE_0'], # 24 always
-    'COUNTER_1': msg_lca_2['COUNTER_1'], # Byte 1 Low Nibble [5:8] - 4-bit counter that increments by +2 (modulo 16)
-    'PILOT_ASSIST_ENGAGED': 1 if lat_active else msg_lca_2['PILOT_ASSIST_ENGAGED'], # Byte 1 [4]
+    'BYTE_0': 24 if lat_active else msg_lca_2['BYTE_0'],  # always 24
+    'COUNTER_1': msg_lca_2['COUNTER_1'],  # +2 mod 16
+    'PILOT_ASSIST_ENGAGED': 1 if lat_active else msg_lca_2['PILOT_ASSIST_ENGAGED'],  # byte 1 bit 4
     'BYTE_1_BITFIELD_0': msg_lca_2['BYTE_1_BITFIELD_0'],
     'ESC_ACTUATING': msg_lca_2['ESC_ACTUATING'],
     'ESC_ELIGIBLE': msg_lca_2['ESC_ELIGIBLE'],
-    'CHECKSUM_2': msg_lca_2['CHECKSUM_2'], # Checksum on bytes 0 and 1
+    'CHECKSUM_2': msg_lca_2['CHECKSUM_2'],  # bytes 0 and 1
     'NEW_SIGNAL_2': 0 if lat_active else msg_lca_2['NEW_SIGNAL_2'],
-    'COUNTER_2': msg_lca_2['COUNTER_2'], # Byte 5 Low Nibble - 4-bit counter that increments by +4 (modulo 16)
+    'COUNTER_2': msg_lca_2['COUNTER_2'],  # +4 mod 16
     'NEW_SIGNAL_3': 3 if lat_active else msg_lca_2['NEW_SIGNAL_3'],
     'BRAKE_PEDAL_PRESSED_B': msg_lca_2['BRAKE_PEDAL_PRESSED_B'],
     'BRAKE_PEDAL_PRESSED_A': msg_lca_2['BRAKE_PEDAL_PRESSED_A'],
-    'CHECKSUM_1': msg_lca_2['CHECKSUM_1'], # Byte 6 is a checksum based on Bytes 1, 2, and 5 only
+    'CHECKSUM_1': msg_lca_2['CHECKSUM_1'],  # bytes 1, 2 and 5
     'BYTE_7': 0 if lat_active else msg_lca_2['BYTE_7'],
   }
 
   dat = packer.make_can_msg('LCA_2', 2, values)
 
-  built_bytes = dat[1]  # dat is (addr, bytes, bus) tuple - extract bytes
+  built_bytes = dat[1]  # (addr, bytes, bus)
   b0 = built_bytes[0]
   b1 = built_bytes[1]
   b2 = built_bytes[2]
@@ -206,7 +163,7 @@ def create_lca_2_message(packer, lat_active: bool, msg_lca_2: dict, counter_1: i
 
   values['CHECKSUM_1'] = checksum_lca_2_message(b0, b5)
 
-  # Only validate when not active and message is valid (BYTE_0 should be 24, not 0)
+  # Validate only when inactive and valid
   if not lat_active:
     #assert values['CHECKSUM_1'] == msg_lca_2['CHECKSUM_1']
     if values['CHECKSUM_1'] != msg_lca_2['CHECKSUM_1']:
@@ -214,7 +171,7 @@ def create_lca_2_message(packer, lat_active: bool, msg_lca_2: dict, counter_1: i
       print(f"b0={b0}, b1={b1}, b2={b2}, b5={b5}, calculated={values['CHECKSUM_1']}, expected={msg_lca_2['CHECKSUM_1']}")
       #assert False
 
-  # Checksum 2 - depends on bytes 0, 1, 3, and 4
+  # Checksum 2: bytes 0, 1, 3, 4
   checksum_2 = checksum_2_0x69_message(b0, b1, b3, b4)
   values['CHECKSUM_2'] = checksum_2
   if not lat_active:
@@ -224,9 +181,9 @@ def create_lca_2_message(packer, lat_active: bool, msg_lca_2: dict, counter_1: i
       #assert False
   values['COUNTER_1'] = counter_1
   values['COUNTER_2'] = counter_2
-  # Re-pack with updated counters to get correct bytes for checksum calculation
+  # Re-pack with the new counters
   dat = packer.make_can_msg('LCA_2', 2, values)
-  built_bytes = dat[1]  # dat is (addr, bytes, bus) tuple - extract bytes
+  built_bytes = dat[1]  # (addr, bytes, bus)
   b0 = built_bytes[0]
   b1 = built_bytes[1]
   b3 = built_bytes[3]
@@ -238,28 +195,14 @@ def create_lca_2_message(packer, lat_active: bool, msg_lca_2: dict, counter_1: i
 
 def create_lca_5_message(packer, lat_active: bool, target_angle_deg: float, msg_lca_5: dict, counter: int,
                          overrides: dict | None = None):
-  """
-  Create LCA_5 message (0x67) with angle-based steering control.
-
-  Args:
-    packer: CAN packer instance
-    lat_active: Whether lateral control is active
-    target_angle_deg: Target steering angle in degrees (positive = left, negative = right)
-    msg_lca_5: Stock LCA_5 values from car
-    counter: Counter value (0-15, increments by 4)
-    overrides: Optional dict of signal overrides (keys are UPPERCASE DBC signal names)
-
-  Returns:
-    CAN message for LCA_5 on bus 2
-  """
+  """LCA_5 (0x67) angle steering message."""
 
   if not lat_active:
     return packer.make_can_msg('LCA_5', 2, msg_lca_5)
 
-  # DBC defines LCA_5_STEER as 15-bit signed with scale 0.05596 deg/count
-  # Packer handles the encoding automatically - just pass the angle in degrees
+  # LCA_5_STEER in degrees, the packer encodes it
 
-  # Build values dictionary (wheel speeds and counter unchanged)
+  # Wheel speeds and counter unchanged
   values = {
     'WHEEL_SPEED_1': msg_lca_5['WHEEL_SPEED_1'],
     'NEW_SIGNAL_4': msg_lca_5['NEW_SIGNAL_4'],
@@ -271,24 +214,18 @@ def create_lca_5_message(packer, lat_active: bool, target_angle_deg: float, msg_
     'COUNTER': counter,
   }
 
-  # Apply any overrides from live testing config
+  # Live-tuning overrides
   if overrides:
     for key, val in overrides.items():
       values[key] = val
 
   dat = packer.make_can_msg('LCA_5', 2, values)
-  built_bytes = dat[1]  # dat is (addr, bytes, bus) tuple - extract bytes
+  built_bytes = dat[1]  # (addr, bytes, bus)
   values['CHECKSUM'] = checksum_lca_5_message(built_bytes[0], built_bytes[1], built_bytes[3], built_bytes[4], built_bytes[5])
   return packer.make_can_msg('LCA_5', 2, values)
 
 def create_speed_message(packer, msg_speed: dict):
-  """
-  Forward SPEED message (0x60) by copying all bytes.
-
-  Args:
-    packer: CAN packer instance
-    msg_speed: Dictionary containing SPEED message values from car
-  """
+  """Forward SPEED (0x60)."""
   values = {
     'SPEED': msg_speed['SPEED'],
     'NEW_SIGNAL_1': msg_speed['NEW_SIGNAL_1'],
@@ -302,13 +239,7 @@ def create_speed_message(packer, msg_speed: dict):
   return packer.make_can_msg('SPEED', 2, values)
 
 def create_speed_2_message(packer, msg_speed_2: dict):
-  """
-  Forward SPEED_2 message (0x68) by copying all bytes.
-
-  Args:
-    packer: CAN packer instance
-    msg_speed_2: Dictionary containing SPEED_2 message values from car
-  """
+  """Forward SPEED_2 (0x68)."""
   values = {
     'WHEEL_SPEED_LEFT': msg_speed_2['WHEEL_SPEED_LEFT'],
     'WHEEL_SPEED_RIGHT': msg_speed_2['WHEEL_SPEED_RIGHT'],
@@ -323,13 +254,7 @@ def create_speed_2_message(packer, msg_speed_2: dict):
   return packer.make_can_msg('SPEED_2', 2, values)
 
 def create_speed_3_message(packer, msg_speed_3: dict):
-  """
-  Forward SPEED_3 message (0x60) by copying all bytes.
-
-  Args:
-    packer: CAN packer instance
-    msg_speed_3: Dictionary containing SPEED_3 message values from car
-  """
+  """Forward SPEED_3."""
   values = {
     'ALL_BYTES': msg_speed_3['ALL_BYTES'],
   }
@@ -337,38 +262,20 @@ def create_speed_3_message(packer, msg_speed_3: dict):
   return packer.make_can_msg('SPEED_3', 2, values)
 
 def create_0x1a_message(packer, msg_0x1a: dict):
-  """
-  Forward 0x1A message by copying all bytes.
-
-  Args:
-    packer: CAN packer instance
-    msg_0x1a: Dictionary containing 0x1A message values from car
-  """
+  """Forward 0x1A."""
   values = {
     'ALL_BYTES': msg_0x1a['ALL_BYTES'],
   }
   return packer.make_can_msg('NEW_MSG_1A', 2, values)
 
 def create_gear_position_message(packer, msg_gear_position: dict):
-  """
-  Forward GEAR_POSITION message by copying all bytes.
-
-  Args:
-    packer: CAN packer instance
-    msg_gear_position: Dictionary containing GEAR_POSITION message values from car
-  """
+  """Forward GEAR_POSITION."""
   values = dict(msg_gear_position)
-  values['GEAR_POSITION'] = msg_gear_position['GEAR_POSITION'] # 3
+  values['GEAR_POSITION'] = msg_gear_position['GEAR_POSITION']  # 3
   return packer.make_can_msg('GEAR_POSITION', 2, values)
 
 def create_egsm_message(packer, msg_egsm: dict):
-  """
-  Forward EGSM message by copying all bytes.
-
-  Args:
-    packer: CAN packer instance
-    msg_egsm: Dictionary containing EGSM message values from car
-  """
+  """Forward EGSM."""
   values = {
     'ALL_BYTES': msg_egsm['ALL_BYTES'],
   }
@@ -387,12 +294,12 @@ def create_pscm_related_message(packer, lat_active: bool, stock_lca_engaged: boo
   # SG_ BYTE_7 : 63|8@0+ (1,0) [0|255] "" XXX
   values = dict(msg_pscm_related)
 
-  # Update SIG1 counter (same value in both locations for redundancy)
+  # SIG1 counter, same value in both places
   values['SIG1_BYTE_1_HI_NIBBLE'] = sig1_counter
   values['SIG1_REPLICA_BYTE_2_LO_NIBLE'] = sig1_counter
 
   dat = packer.make_can_msg('PSCM_RELATED', 0, values)
-  built_bytes = dat[1]  # dat is (addr, bytes, bus) tuple - extract bytes
+  built_bytes = dat[1]  # (addr, bytes, bus)
   b1 = built_bytes[1]
   b2 = built_bytes[2]
   values['CHECKSUM_1'] = checksum_1_pscm_related_message(b1, b2)
@@ -407,37 +314,15 @@ def create_pscm_related_message(packer, lat_active: bool, stock_lca_engaged: boo
 
 def create_lca_4_message(packer, lat_active: bool, msg_lca_4: dict, lca_4_steer: int,
                          overrides: dict | None = None):
-  """
-  Create LCA_4 (0x90) message to maintain Pilot Assist state when openpilot is active.
-
-  Critical: LCA_ENABLE (byte 1 bits 0-1) must be held at 3 (both bits=1) when lat_active.
-  When PA turns off, these bits start varying (become counters). We need to keep them
-  stable at 3 to fool PSCM into thinking PA is still on, allowing LCA commands to be accepted.
-
-  Based on analysis from route_analysis/pilot_assist_off/BASELINE_FILTERED_FINDINGS.md:
-  - Message 0x090 byte 1 bits 0-1 are PA state signals
-  - During PA ON: bits are stable at 3 (binary 11)
-  - During PA OFF: bits start varying (counters)
-  - PSCM uses this to determine whether to accept LCA steering commands
-
-  Args:
-    packer: CAN packer instance
-    lat_active: Whether lateral control is active
-    msg_lca_4: Dictionary containing LCA_4 message values from car
-    lca_4_steer: Pre-computed signed angle with hysteresis applied
-    overrides: Optional dict of signal overrides (keys are UPPERCASE DBC signal names)
-
-  Returns:
-    CAN message for LCA_4 on bus 2
-  """
+  """LCA_4 (0x90), holds LCA_ENABLE at 3 so the PSCM sees PA on."""
   if not lat_active:
-    # When not active, just relay stock message unchanged
+    # Inactive: relay stock
     return packer.make_can_msg('LCA_4', 2, msg_lca_4)
 
-  # When lat_active, force LCA_ENABLE to 3 (PA ON state)
+  # Active: LCA_ENABLE = 3 (PA on)
   values = {
     'BYTE_0': msg_lca_4['BYTE_0'],
-    'LCA_ENABLE': 3,  # Force bits 0-1 to 1 (value=3 means both bits set)
+    'LCA_ENABLE': 3,  # both bits set
     'BYTE_1_FLAGS': msg_lca_4['BYTE_1_FLAGS'],
     'BYTE_1_NIBBLE_HI': msg_lca_4['BYTE_1_NIBBLE_HI'],
     'BYTE_2_3': msg_lca_4['BYTE_2_3'],
@@ -447,16 +332,15 @@ def create_lca_4_message(packer, lat_active: bool, msg_lca_4: dict, lca_4_steer:
     'BYTE_7_NIBBLE_HI': msg_lca_4['BYTE_7_NIBBLE_HI'],
   }
 
-  # Apply any overrides from live testing config
+  # Live-tuning overrides
   if overrides:
     for key, val in overrides.items():
       values[key] = val
 
-  # TODO: Add checksum calculation when checksum function is implemented
-  # If message has a checksum signal, it would be calculated here like:
+  # TODO checksum, e.g.:
   # values['CHECKSUM'] = checksum_lca_4_message(...)
 
-  # TODO: Add checksum validation when not active (once checksum is known)
+  # TODO checksum check when inactive
   # if not lat_active and 'CHECKSUM' in msg_lca_4:
   #   if values['CHECKSUM'] != msg_lca_4['CHECKSUM']:
   #     carlog.warning("[volvocan.py] LCA_4 CHECKSUM mismatch")
@@ -467,7 +351,7 @@ def create_lca_6_message(packer, lat_active: bool, msg_lca_6: dict, lca_6_steer:
                          overrides: dict | None = None):
 
   if not lat_active:
-    # When not active, just relay stock message unchanged
+    # Inactive: relay stock
     return packer.make_can_msg('LCA_6', 2, msg_lca_6)
 
   values = {
@@ -480,7 +364,7 @@ def create_lca_6_message(packer, lat_active: bool, msg_lca_6: dict, lca_6_steer:
     'NEW_SIGNAL_5': msg_lca_6['NEW_SIGNAL_5'],
   }
 
-  # Apply any overrides from live testing config
+  # Live-tuning overrides
   if overrides:
     for key, val in overrides.items():
       values[key] = val
@@ -491,7 +375,7 @@ def create_lca_7_message(packer, lat_active: bool, msg_lca_7: dict, lca_7_steer:
                          overrides: dict | None = None, steer_active: bool = False):
 
   if not lat_active:
-    # When not active, just relay stock message unchanged
+    # Inactive: relay stock
     return packer.make_can_msg('LCA_7', 2, msg_lca_7)
 
   values = {
@@ -503,7 +387,7 @@ def create_lca_7_message(packer, lat_active: bool, msg_lca_7: dict, lca_7_steer:
     'NEW_SIGNAL_4': msg_lca_7['NEW_SIGNAL_4'],
   }
 
-  # Apply any overrides from live testing config
+  # Live-tuning overrides
   if overrides:
     for key, val in overrides.items():
       values[key] = val
@@ -511,8 +395,7 @@ def create_lca_7_message(packer, lat_active: bool, msg_lca_7: dict, lca_7_steer:
   return packer.make_can_msg('LCA_7', 2, values)
 
 
-# ---- V60/EUCD (FSM0-4, PSCM1) ----
-# Adapted from the sunnypilot volvo_oplong port.
+# ---- V60/EUCD (FSM0-4, PSCM1), from sunnypilot volvo_oplong ----
 
 def create_eucd_button_msg(packer, resume=False, cancel=False, set_plus=False, minus=False, bus=0):
   msg = {
@@ -529,7 +412,7 @@ def create_eucd_button_msg(packer, resume=False, cancel=False, set_plus=False, m
 
 
 def create_eucd_lkas_state_msg(packer, steering_angle: float, stock_values: dict):
-  # servo state to the camera, LKA torque/active cleared
+  # Servo state to the camera, LKA torque/active cleared
   msg = {
     "LKATorque": 0,
     "SteeringAngleServo": steering_angle,
@@ -563,7 +446,7 @@ def create_eucd_lka_msg(packer, apply_steer: float, steer_direction: int):
     "SET_X_A4": 0xa7,
   }
 
-  # calculate checksum
+  # Checksum
   dat = packer.make_can_msg("FSM2", 0, values)[1]
   values["Checksum"] = calculate_eucd_lka_checksum(dat)
 
@@ -571,7 +454,7 @@ def create_eucd_lka_msg(packer, apply_steer: float, steer_direction: int):
 
 
 def eucd_next_long_mode(mode: LongMode, accel: float, brake_offset: float = 0.) -> LongMode:
-  # brake_offset: slope part of the coast accel; the BRAKE thresholds move by it (down uphill, up downhill)
+  # brake_offset shifts the BRAKE thresholds by the slope
   CCP = CarControllerParams
   if mode == LongMode.BRAKE:
     if accel <= CCP.EUCD_BRAKE_EXIT + brake_offset:
@@ -588,7 +471,7 @@ def eucd_next_long_mode(mode: LongMode, accel: float, brake_offset: float = 0.) 
 
 
 def eucd_fsm3_traction(accel: float, mode: LongMode) -> int:
-  # FSM3 Byte_3 traction request (fit to the stock camera)
+  # FSM3 Byte_3 traction request
   if mode == LongMode.BRAKE:
     return 0
   if mode == LongMode.DRIVE:
@@ -597,7 +480,7 @@ def eucd_fsm3_traction(accel: float, mode: LongMode) -> int:
 
 
 def create_eucd_longitudinal(packer, stock_fsm3, accel, acc_check, mode: LongMode | None = None):
-  # Camera FSM3 with OP's accel and ACC_Check; with mode, also OP's mode (Byte_2 bits 1:0) and traction.
+  # Camera FSM3 with OP's accel, ACC_Check, mode and traction
   values = {s: stock_fsm3[s] for s in (
     "ACC_Standstill",
     "Byte_01",
@@ -620,7 +503,7 @@ def create_eucd_longitudinal(packer, stock_fsm3, accel, acc_check, mode: LongMod
 
 
 def eucd_fsm4_brake_value(accel: float, brake: bool) -> int:
-  # FSM4 Byte_5/Byte_6: 0x8000 | brake flag 0x4000 | 14-bit target
+  # FSM4 Byte_5/6: 0x8000 | brake flag 0x4000 | 14-bit target
   CCP = CarControllerParams
   bp, v = (CCP.EUCD_FSM4_BRAKE_ACCEL_BP, CCP.EUCD_FSM4_BRAKE_VALUE_V) if brake else (CCP.EUCD_FSM4_NO_BRAKE_ACCEL_BP, CCP.EUCD_FSM4_NO_BRAKE_VALUE_V)
   return 0x8000 | (0x4000 if brake else 0) | int(round(float(np.interp(accel, bp, v))))
@@ -630,14 +513,14 @@ EUCD_BYTES = tuple(f"Byte_{i}" for i in range(8))
 
 
 def create_eucd_fsm4(packer, stock_fsm4, accel: float, mode: LongMode | None = None, cam_weight: float = 0.):
-  # Camera FSM4 relayed per frame; with mode, the brake flag and target follow OP's accel when either side brakes.
+  # Camera FSM4; brake flag and target follow OP's accel when either side brakes
   values = {s: stock_fsm4[s] for s in ("Byte_0", "Byte_1", "Byte_2", "ACC_LeadSpeed", "Byte_4", "Byte_5", "Byte_6", "Byte_7")}
   op_brake = mode == LongMode.BRAKE
   cam_brake = bool(int(stock_fsm4["Byte_5"]) & 0x40)
   if mode is not None and (op_brake or cam_brake):
     value = eucd_fsm4_brake_value(accel, op_brake)
     if cam_weight > 0. and op_brake and cam_brake:
-      # blend into the camera's target while handing it the stop
+      # Blend into the camera's target during its stop
       cam_value = ((int(stock_fsm4["Byte_5"]) << 8) | int(stock_fsm4["Byte_6"])) & 0x3FFF
       blended = int(round((value & 0x3FFF) + cam_weight * (cam_value - (value & 0x3FFF))))
       value = (value & 0xC000) | blended
@@ -647,7 +530,7 @@ def create_eucd_fsm4(packer, stock_fsm4, accel: float, mode: LongMode | None = N
 
 
 def create_eucd_fsm0(packer, stock_fsm0, ecm_engaged: bool):
-  # Camera FSM0 relayed per frame, never ACC enabled without the ECM engaged.
+  # Camera FSM0, never ACC enabled without the ECM engaged
   values = {s: stock_fsm0[s] for s in EUCD_BYTES}
   if not ecm_engaged:
     values["Byte_2"] = int(values["Byte_2"]) & ~0x04
@@ -655,7 +538,7 @@ def create_eucd_fsm0(packer, stock_fsm0, ecm_engaged: bool):
 
 
 def create_eucd_cam_brake_status(packer, stock_323, mask: bool):
-  # 0x323 to the camera; masked: Byte_4 bit4 (brake applied) cleared
+  # 0x323 to the camera; masked clears brake applied
   values = {s: stock_323[s] for s in EUCD_BYTES}
   if mask:
     values["Byte_4"] = int(stock_323["Byte_4"]) & ~0x10
@@ -663,7 +546,7 @@ def create_eucd_cam_brake_status(packer, stock_323, mask: bool):
 
 
 def create_eucd_cam_brake_level(packer, stock_133, frozen_level: int | None):
-  # 0x133 to the camera; masked: Byte_1 bits 6:0 (brake level) held
+  # 0x133 to the camera; masked holds the brake level
   values = {s: stock_133[s] for s in EUCD_BYTES}
   if frozen_level is not None:
     values["Byte_1"] = (int(stock_133["Byte_1"]) & 0x80) | (frozen_level & 0x7F)
@@ -671,7 +554,7 @@ def create_eucd_cam_brake_level(packer, stock_133, frozen_level: int | None):
 
 
 def create_eucd_cam_wheel_status(packer, stock_220, mask: bool, spoof: bool = False):
-  # 0x220 to the camera; Byte_2 bit2 (brake request active): masked clears it, spoofed sets it
+  # 0x220 to the camera; brake request bit masked or spoofed
   values = {s: stock_220[s] for s in EUCD_BYTES}
   if mask:
     values["Byte_2"] = int(stock_220["Byte_2"]) & ~0x04
@@ -681,7 +564,7 @@ def create_eucd_cam_wheel_status(packer, stock_220, mask: bool, spoof: bool = Fa
 
 
 def create_eucd_cam_brake_request_ack(packer, stock_299, mask: bool, spoof: bool = False):
-  # 0x299 to the camera; Byte_5 bit3 (brake ack, active low): masked sets it, spoofed clears it
+  # 0x299 to the camera; brake ack (active low) masked or spoofed
   values = {s: stock_299[s] for s in EUCD_BYTES}
   if mask:
     values["Byte_5"] = int(stock_299["Byte_5"]) | 0x08
@@ -691,7 +574,7 @@ def create_eucd_cam_brake_request_ack(packer, stock_299, mask: bool, spoof: bool
 
 
 def create_eucd_radar(packer, stock_fsm1, mode: LongMode | None = None):
-  # Camera FSM1 relayed; with mode, Byte_2 bit2 follows OP braking
+  # Camera FSM1; Byte_2 bit2 follows OP braking
   values = {s: stock_fsm1[s] for s in (
     "ACC_Distance",
     "Byte_1",

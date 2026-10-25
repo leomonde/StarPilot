@@ -13,8 +13,7 @@ SAFETY_VOLVO = structs.CarParams.SafetyModel.volvo
 class CarInterface(CarInterfaceBase):
   CarState = CarState
   CarController = CarController
-  # Without this binding, CarInterfaceBase uses the default RadarInterfaceBase stub
-  # which returns empty RadarData — liveTracks.points would stay at 0 for the V60's ESR.
+  # Binds the ESR radar interface
   RadarInterface = RadarInterface
 
   @staticmethod
@@ -39,20 +38,18 @@ class CarInterface(CarInterfaceBase):
     ret.steerLimitTimer = 0.8 if is_eucd else 0.1
     ret.steerAtStandstill = not isinstance(platform, VolvoC1PlatformConfig)
 
-    # Use angle-based steering control for Volvo CMA/EUCD platforms
+    # Angle-based steering
     ret.steerControlType = structs.CarParams.SteerControlType.angle
-    # When Bus.radar is in the DBC (V60/EUCD), RadarInterface decodes the Delphi ESR 2.5
-    # directly (64 tracks at 20Hz) instead of relying on stock FSM's single-lead ACC_Distance.
+    # V60/EUCD: Delphi ESR 2.5 decoded directly
     ret.radarUnavailable = Bus.radar not in DBC[candidate]
 
     ret.alphaLongitudinalAvailable = is_eucd
     if is_eucd:
-      # OP long: stock ACC still engages and owns the set speed (pcmCruise); OP replaces FSM3 accel/mode/traction
+      # OP long: stock ACC engages and owns the set speed; OP replaces FSM3
       ret.openpilotLongitudinalControl = alpha_long
       if ret.openpilotLongitudinalControl:
-        ret.longitudinalActuatorDelay = 0.5  # FSM3 accel request -> aEgo, ~0.6s in stock routes 807/808
-        # the car delivers ~70% of the requested decel; integral on the accel error closes that gap
-        # (no proportional term, the ECM has its own loop)
+        ret.longitudinalActuatorDelay = 0.5  # FSM3 accel to aEgo delay
+        # Integral-only accel loop
         ret.longitudinalTuning.kiBP = [0.]
         ret.longitudinalTuning.kiV = [0.5]
 

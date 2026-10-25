@@ -5,10 +5,7 @@ from opendbc.car.volvo.helpers import (
   checksum_2_pscm_related_message,
 )
 
-# (b1, b2) -> byte[0], observed on the bus.
-# b1 = SIG1 counter (high nibble) | LCA_ENABLED_ECHO (low nibble), b2 = 0x80 | counter.
-# ECHO 0/1/4 are normal driving; ECHO 6 only appears while ESC is intervening and was
-# the case that used to fall through to a 0x00 checksum.
+# (b1, b2) -> byte 0, from the bus; ECHO 6 only during ESC
 PSCM_RELATED_CHECKSUM_1 = {
   (0x00, 0x80): 0xD4, (0x01, 0x80): 0xC9, (0x04, 0x80): 0xA0, (0x06, 0x80): 0x9A,
   (0x10, 0x81): 0x98, (0x11, 0x81): 0x85, (0x14, 0x81): 0xEC, (0x16, 0x81): 0xD6,
@@ -42,8 +39,7 @@ class TestPscmRelatedChecksums(unittest.TestCase):
         assert checksum_1_pscm_related_message(b1, b2) == expected
 
   def test_checksum_1_covers_esc_echo(self):
-    # regression: ECHO=6 used to miss the lookup table and return 0x00, which the
-    # receiving ECU logged as a checksum fault for as long as ESC was active
+    # Regression: ECHO 6 returned 0x00
     for counter in range(15):
       b1, b2 = (counter << 4) | 6, 0x80 | counter
       with self.subTest(counter=counter):

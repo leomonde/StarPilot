@@ -10,8 +10,7 @@ from opendbc.car.volvo.values import CAR, CANBUS, CarControllerParams, DBC, EcmA
 GearShifter = structs.CarState.GearShifter
 TransmissionType = structs.CarParams.TransmissionType
 
-# main-bus SPEED (0x60) is raw counts in the DBC; measured against GPS ground speed.
-# Must match VOLVO_SPEED_TO_MS in opendbc/safety/modes/volvo.h.
+# Main-bus SPEED (0x60) raw counts to m/s, matches VOLVO_SPEED_TO_MS in volvo.h
 SPEED_TO_MS = 0.003977
 STEERING_PRESSED_THRESHOLD = 2
 
@@ -35,7 +34,7 @@ class CarState(CarStateBase):
     self.msg_lca_3 = {}
     self.msg_gear_position = {}
     self.pilot_assist_engaged = False
-    self.msg_lca_5 = {}  # Formerly msg_speed_1
+    self.msg_lca_5 = {}  # formerly msg_speed_1
     self.msg_speed = {}
     self.msg_speed_2 = {}
     self.msg_0x1a = {}
@@ -74,63 +73,54 @@ class CarState(CarStateBase):
     cp_party = can_parsers[Bus.party]
     ret = structs.CarState()
 
-    # car speed
-    # SPEED on the main bus, not BUS1_SPEED on the PT bus: the main bus is identical
-    # across harnesses, while which car bus lands on PT (bus 1) is not, and the PT DBC
-    # in use depends on the fingerprint. Regressed against GPS ground speed over two
-    # routes on different harnesses: r=0.99989 both, residual sd 0.35-0.40 km/h.
+    # Car speed from the main-bus SPEED
     ret.vEgoRaw = cp_main.vl["SPEED"]["SPEED"] * SPEED_TO_MS
     ret.vEgo, ret.aEgo = self.update_speed_kf(ret.vEgoRaw)
-    ret.standstill = ret.vEgoRaw <= 0.1 # 0.1 m/s
+    ret.standstill = ret.vEgoRaw <= 0.1  # m/s
 
-    # gas
-    # CMA ECM_1.ACCELERATOR_PEDAL_POS is raw 0-255 (DBC factor 1, idle ~20).
-    # SPA ECM_1.ACCELERATOR_PEDAL_POS is DBC-scaled to percent (factor 0.00390625, idle ~0).
-    # Thresholds must match volvo.h (see opendbc/safety/modes/volvo.h GAS_PRESSED_THRESHOLD_*)
-    # and opendbc/safety/tests/test_volvo.py::test_gas_threshold_self_consistent.
+    # Gas: CMA raw 0-255, SPA percent; thresholds match volvo.h
     if self.is_spa:
       ret.gasPressed = cp_pt.vl["ECM_1"]["ACCELERATOR_PEDAL_POS"] > 1.0  # percent
     else:
-      ret.gasPressed = cp_pt.vl["ECM_1"]["ACCELERATOR_PEDAL_POS"] > 20+1  # raw counts, 20 baseline + 1 tolerance
+      ret.gasPressed = cp_pt.vl["ECM_1"]["ACCELERATOR_PEDAL_POS"] > 20+1  # raw counts, 20 baseline + 1
 
     # brake
     #ret.brakePressed = bool(cp_main.vl["LCA_2"]["BRAKE_PEDAL_PRESSED_A"] or cp_main.vl["LCA_2"]["BRAKE_PEDAL_PRESSED_B"])
-    # BRAKE_PEDAL_PRESSED_A goes active when user starts pressing brake pedal, but no brake light is on yet due to tolerance
-    # BRAKE_PEDAL_PRESSED_B goes active when when the brake pedal is pressed above minimum threshold, brake light is on
+    # BRAKE_PEDAL_PRESSED_A at first touch, _B with the brake light
     ret.brakePressed = cp_main.vl["LCA_2"]["BRAKE_PEDAL_PRESSED_B"] == 1
-    ret.parkingBrake = False # TODO: add parking brake
+    ret.parkingBrake = False  # TODO parking brake
 
-    # stability control - becomes true when ESC intervenes (e.g., aquaplaning)
+    # ESC active
     ret.espActive = cp_main.vl["LCA_2"]["ESC_ACTUATING"] == 1 and cp_main.vl["LCA_2"]["ESC_ELIGIBLE"] == 1
 
     # steering wheel
-    ret.steeringAngleDeg = cp_party.vl['PSCM']['PSCM_ANGLE_SENSOR'] # openpilot expects a negative value for a right turn
+    ret.steeringAngleDeg = cp_party.vl['PSCM']['PSCM_ANGLE_SENSOR']  # negative for a right turn
     #ret.steeringAngleDeg = cp_party.vl['SAS']['SAS_ANGLE_SENSOR']
 
-    ret.steeringTorque = -cp_party.vl['DRIVER_INPUT']['STEERING_DRIVER_INPUT']  # Car right turn is negative, openpilot right turn is positive
+    ret.steeringTorque = -cp_party.vl['DRIVER_INPUT']['STEERING_DRIVER_INPUT']  # openpilot right turn is positive
     driver_input = abs(cp_party.vl['DRIVER_INPUT']['STEERING_DRIVER_INPUT'])
     ret.steeringPressed = driver_input > STEERING_PRESSED_THRESHOLD
 
-    # EPS status - placeholder until actual signal is found
-    self.eps_active = True  # Assume EPS is active for now
+    # EPS status placeholder
+    self.eps_active = True  # assumed active
 
     if self.is_spa:
-      # SPA: byte 0 bit 1, inverted (0 = cruise on, 1 = cruise off)
+      # SPA: byte 0 bit 1, inverted
       cruise_raw = cp_pt.vl["BUS1_CRUISE_CONTROL"]["CRUISE_CONTROL_SPA_ENABLED"] == 1
     else:
-      # CMA: two separate boolean signals
+      # CMA: two booleans
       cruise_raw = cp_pt.vl["BUS1_CRUISE_CONTROL"]["CRUISE_CONTROL_ENABLED"] == 1 or cp_pt.vl["BUS1_CRUISE_CONTROL"]["CRUISE_CONTROL_ENABLED_IDLE_TRAFFIC"] == 1
 
     ret.cruiseState.enabled = cruise_raw
 
     self.gas_pressed_prev = ret.gasPressed
-    ret.cruiseState.available = True  # TODO: Determine actual availability
-    ret.cruiseState.speed = 0  # TODO: Find cruise set speed (not required for lateral control)
+    ret.cruiseState.available = True  # TODO real availability
+    ret.cruiseState.speed = 0  # TODO set speed
     ret.cruiseState.nonAdaptive = False
-    ret.cruiseState.standstill = ret.standstill # False # Todo: Find cruise control standstill signal
+    ret.cruiseState.standstill = ret.standstill  # TODO cruise standstill
 
     # gear
-    gearPosition = cp_main.vl['GEAR_POSITION']['GEAR_POSITION'] # 0: P; 1: R; 2: N; 3: D; 4: B;
+    gearPosition = cp_main.vl['GEAR_POSITION']['GEAR_POSITION']  # 0 P, 1 R, 2 N, 3 D, 4 B
     if gearPosition == 0:
       ret.gearShifter = GearShifter.park
     elif gearPosition == 1:
@@ -142,15 +132,15 @@ class CarState(CarStateBase):
     elif gearPosition == 4:
       ret.gearShifter = GearShifter.drive
 
-    # blinkers TODO FlexRay
+    # Blinkers TODO (FlexRay)
     ret.leftBlinker = False
     ret.rightBlinker = False
 
-    # lock info TODO FlexRay
-    ret.doorOpen = False # TODO: add door open
-    ret.seatbeltUnlatched = False # TODO: add seatbelt unlatched
+    # Lock info TODO (FlexRay)
+    ret.doorOpen = False  # TODO door open
+    ret.seatbeltUnlatched = False  # TODO seatbelt
 
-    # Store entire message dictionaries
+    # Store the message dicts
     self.msg_pscm = cp_party.vl['PSCM']
     self.msg_lca = cp_main.vl['LCA']
     self.msg_lca_2 = cp_main.vl['LCA_2']
@@ -259,16 +249,16 @@ class CarState(CarStateBase):
     ret.cruiseState.speed = pt_cp.vl["ACC_Speed"]["ACC_Speed"] * CV.KPH_TO_MS
     ret.cruiseState.speedCluster = ret.cruiseState.speed
     ret.cruiseState.available = bool(cam_cp.vl["FSM0"]["ACC_Available"])
-    # the ECM is the ACC master
+    # ECM is the ACC master
     self.eucd_ecm_acc_engaged = int(pt_cp.vl["EngineData"]["ACC_State_ECM"]) == EcmAccState.ENGAGED
     ret.cruiseState.enabled = self.eucd_ecm_acc_engaged
-    # camera standstill hold (also set in its fault state, so gated by the car's standstill)
+    # Camera standstill hold, gated by the car's standstill
     ret.cruiseState.standstill = bool(cam_cp.vl["FSM3"]["ACC_Standstill"]) and ret.standstill
     ret.cruiseState.nonAdaptive = False
     ret.accFaulted = False
     self.eucd_acc_distance = cam_cp.vl["FSM1"]["ACC_Distance"]
 
-    # Check if servo stops responding when ACC is active
+    # Servo timeout while ACC is active
     if ret.cruiseState.enabled and ret.vEgo > self.CP.minSteerSpeed:
       if not self.eucd_cruise_enabled_prev:
         self.eucd_eps_torque_timer = 0
@@ -284,7 +274,7 @@ class CarState(CarStateBase):
 
     self.eucd_cruise_enabled_prev = ret.cruiseState.enabled
 
-    # gear: only reverse is decoded (Gear_Info 44 = reverse); everything else reports drive
+    # Gear: reverse decoded, else drive
     if pt_cp.vl["Gear_Info"]["Gear"] == 44 and ret.vEgo < 3:
       ret.gearShifter = GearShifter.reverse
     else:
@@ -298,14 +288,13 @@ class CarState(CarStateBase):
     ret.leftBlinker = pt_cp.vl["MiscCarInfo"]["TurnSignal"] == 1
     ret.rightBlinker = pt_cp.vl["MiscCarInfo"]["TurnSignal"] == 3
 
-    # Synthesize one accelCruise/decelCruise per frame from pending delta.
+    # One accelCruise/decelCruise per frame from the pending delta
     cruise_kph_now = round(ret.cruiseState.speed * CV.MS_TO_KPH)
     if ret.cruiseState.enabled and self.eucd_cruise_enabled_prev:
       self._eucd_pending_delta += cruise_kph_now - self._eucd_cruise_speed_prev_kph
     self._eucd_cruise_speed_prev_kph = cruise_kph_now
 
-    # Emit one event per physical ACC step; trigger on delta >= 1 to handle Volvo's
-    # sub-step snaps (e.g. 41->45 km/h) that would never reach a larger threshold.
+    # One event per ACC step
     step = max(1, self._eucd_custom_acc_step)
     button_events = []
     if self._eucd_pending_delta >= 1:
@@ -315,8 +304,7 @@ class CarState(CarStateBase):
       button_events.append(structs.CarState.ButtonEvent(pressed=False, type=ButtonType.decelCruise))
       self._eucd_pending_delta = min(0, self._eucd_pending_delta + step)
 
-    # time gap buttons: StarPilot cycles the driving personality on gapAdjustCruise.
-    # A press needs the signal set and its inverted copy cleared.
+    # Gap buttons cycle the personality (bit set, inverted copy cleared)
     for signal in self.eucd_gap_button_states:
       pressed = bool(pt_cp.vl["CCButtons"][signal]) and not pt_cp.vl["CCButtons"][signal + "Inv"]
       button_events.extend(create_button_events(pressed, self.eucd_gap_button_states[signal], {True: ButtonType.gapAdjustCruise}))
@@ -330,7 +318,7 @@ class CarState(CarStateBase):
     self.eucd_pscm_stock_values = pt_cp.vl["PSCM1"]
     self.eucd_stock_FSM1 = copy.copy(cam_cp.vl["FSM1"])
     self.eucd_stock_FSM3 = copy.copy(cam_cp.vl["FSM3"])
-    # all frames this cycle of the messages carcontroller relays 1:1
+    # Frames carcontroller relays 1:1
     self.eucd_stock_FSM0_frames = eucd_all_frames(cam_cp, "FSM0")
     self.eucd_stock_FSM4_frames = eucd_all_frames(cam_cp, "FSM4")
     self.eucd_stock_133_frames = eucd_all_frames(pt_cp, "NEW_MSG_133")
@@ -339,7 +327,7 @@ class CarState(CarStateBase):
     self.eucd_stock_299_frames = eucd_all_frames(pt_cp, "NEW_MSG_299")
 
     fp_ret = custom.StarPilotCarState.new_message()
-    # TSR speed limit from the camera (0 = no sign)
+    # TSR speed limit, 0 = no sign
     tsr_kph = cam_cp.vl["FSM5"]["TSR_Speed"]
     fp_ret.dashboardSpeedLimit = tsr_kph * CV.KPH_TO_MS if tsr_kph > 0 else 0.0
     return ret, fp_ret

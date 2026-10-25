@@ -1,1 +1,1 @@
-# Volvo CMA platform support for openpilot
+# Volvo support

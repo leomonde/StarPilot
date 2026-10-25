@@ -10,10 +10,9 @@ from opendbc.car.fw_query_definitions import FwQueryConfig, Request, p16
 
 Ecu = CarParams.Ecu
 
-# C1 support is adapted from the original dragonpilot V40 port:
-# https://github.com/dragonpilot/dragonpilot/commit/773dce507082d931236b64dca8024dce9625446f
+# C1 adapted from dragonpilot's V40 port (commit 773dce5)
 
-# V60/EUCD support (lateral + longitudinal) is adapted from the sunnypilot volvo_oplong port.
+# V60/EUCD adapted from sunnypilot volvo_oplong
 
 
 class VolvoSafetyFlags(IntFlag):
@@ -23,7 +22,7 @@ class VolvoSafetyFlags(IntFlag):
 
 
 class SteerDirection(IntEnum):
-  """LKASteerDirection: EUCD needs an 8-frame wait on direction change."""
+  """LKA steer direction; EUCD waits 8 frames on a direction change."""
   NONE = 0
   RIGHT = 1
   LEFT = 2
@@ -31,87 +30,50 @@ class SteerDirection(IntEnum):
 
 
 class LongMode(IntEnum):
-  """FSM3 Byte_2 bits 1:0. The ECM uses the hydraulic brake only in BRAKE."""
+  """FSM3 Byte_2 mode bits; the ECM brakes hydraulically only in BRAKE."""
   BRAKE = 0
   COAST = 1
   DRIVE = 2
 
 
 class EcmAccState(IntEnum):
-  """EngineData Byte_4 bits 5:4, the ECM's ACC state."""
+  """ECM ACC state, EngineData Byte_4 bits 5:4."""
   OFF = 1
   STANDBY = 2
   ENGAGED = 3
 
 
 class CarControllerParams:
-  STEER_STEP = 1  # 100 Hz LCA command frequency (controlsd runs at 100 Hz)
+  STEER_STEP = 1  # 100 Hz LCA command
 
-  # Max commanded-vs-actual steering angle error (deg). Stock Volvo Pilot Assist holds
-  # commanded within ~1.7° of actual even under sustained driver override; bounding the
-  # command to actual ± this error prevents the stale-command snap-back that causes
-  # aggressive post-release overcorrection.
+  # Max commanded vs actual steering angle error (deg)
   ANGLE_ERROR = 3.0
 
-  # LCA torque-authority envelope, modeled after stock Pilot Assist behavior.
-  # LCA_STEER_LOOSELY (positive arm) and LCA_STEER_LOOSELY_INV (negative arm)
-  # form a directional envelope that PSCM applies to its EPS torque. Stock PA:
-  #  - holds both arms at saturation (±LCA_AUTH_MAX) when no driver torque
-  #  - on driver override, collapses both arms symmetrically at COLLAPSE_RATE
-  #    until envelope reaches ~±LCA_AUTH_SPLIT, then splits asymmetrically:
-  #    the arm matching driver direction (yielding) settles at ±PLATEAU_YIELD,
-  #    the counter arm holds at ±PLATEAU_COUNTER (yield is shallower than counter)
-  #  - rebuilds at REBUILD_RATE after release (~3 s back to saturation)
-  # See route_analysis/lca_override_mechanism.md for the data behind these.
-  LCA_AUTH_MAX = 614              # signal saturation
-  LCA_AUTH_PLATEAU_COUNTER = 130  # counter-arm magnitude during sustained override
-  # Override trigger thresholds on |CS.out.steeringTorque| (op-convention raw
-  # units, mirror of DRIVER_INPUT). Must be ABOVE the resting-hand noise floor
-  # (CS.steeringPressed uses |raw|>2 as a sensitive DM-fallback floor and does
-  # NOT indicate override intent — don't use it for envelope triggering).
-  # Hysteresis: enter override at ENTER, exit at EXIT (< ENTER) to prevent the
-  # envelope flapping between collapse and rebuild when driver torque hovers
-  # near a single threshold (was causing ~10 Hz EPS-torque ripple in lane
-  # changes when driver applied 6-8 raw to "ride along" with op).
+  # LCA torque-authority envelope, like stock Pilot Assist
+  LCA_AUTH_MAX = 614  # saturation
+  LCA_AUTH_PLATEAU_COUNTER = 130  # counter-arm magnitude in override
+  # Override enter/exit thresholds on |steeringTorque|
   LCA_AUTH_OVERRIDE_ENTER = 5
   LCA_AUTH_OVERRIDE_EXIT = 3
-  # "Light contact" / haptic-acknowledgment region. When |drv| crosses into
-  # [LIGHT_THRESH, OVERRIDE_THRESH] from below, briefly collapse the envelope
-  # for LIGHT_HOLD_FRAMES (a haptic confirmation of hand-on-wheel detection),
-  # then rebuild even while the contact persists. Prevents the driver from
-  # needing to sustain force just to feel that the system noticed them — helps
-  # with hand-fatigue / RSI.
-  # Rising edge detected via per-frame derivative; the brief-yield window does
-  # NOT re-arm while still active, so a steady elevated torque only triggers
-  # one yield and then the envelope rebuilds.
-  # Cooldown: light_collapse only fires when real_override has been off for
-  # LIGHT_COOLDOWN_FRAMES — suppresses repeated firings during active
-  # co-steering (lane changes), where |drv| oscillates and would otherwise
-  # re-arm the haptic-ack window each time, causing felt ripple.
-  LCA_AUTH_LIGHT_THRESH = 3            # min |drv| to consider as contact
-  LCA_AUTH_LIGHT_RISE_DELTA = 1.0      # min per-frame increase in |drv| to count as rising contact
-  LCA_AUTH_LIGHT_HOLD_FRAMES = 15      # ~150 ms of yield on fresh light contact
-  LCA_AUTH_LIGHT_COOLDOWN_FRAMES = 30  # ~300 ms quiet-time on real_override before light contact re-arms
-  # Yield-arm plateau scales with driver-torque magnitude so brief strong presses
-  # (potholes, lane corrections) get full yield while light sustained pressure
-  # only gets a soft yield. yield_signed = YIELD_BASE − YIELD_SLOPE *
-  # max(0, drv_mag_filt − OVERRIDE_ENTER), clamped to [YIELD_MIN, YIELD_BASE].
-  # drv_mag_filt is a low-pass of |drv| (alpha=0.04, ~250 ms time constant) —
-  # without it, 1-2 unit driver-torque jitter became ~10 unit yield-arm jitter
-  # which PSCM converted to felt ripple at sustained co-steering pressure.
-  LCA_AUTH_YIELD_BASE = 60        # yield-arm magnitude at the override threshold
-  LCA_AUTH_YIELD_SLOPE = 8        # counts of yield reduction per unit |drv torque| above threshold
-  LCA_AUTH_YIELD_MIN = 0          # yield authority without crossing the safety sign boundary
-  LCA_AUTH_YIELD_LP_ALPHA = 0.04  # LP-filter coefficient on |drv| for yield calc (~250 ms tau)
-  LCA_AUTH_SPLIT = 200            # symmetric → asymmetric handover
-  LCA_AUTH_REBUILD_RATE = 230     # counts/s (≈ 2.7 s rebuild from 0 to 614)
-  LCA_AUTH_COLLAPSE_RATE = 2500   # counts/s base (scales with |drv|/THRESH for sharper pothole jolts)
+  # Light-contact haptic yield
+  LCA_AUTH_LIGHT_THRESH = 3  # min |drv| for contact
+  LCA_AUTH_LIGHT_RISE_DELTA = 1.0  # min |drv| rise per frame
+  LCA_AUTH_LIGHT_HOLD_FRAMES = 15  # yield frames (~150 ms)
+  LCA_AUTH_LIGHT_COOLDOWN_FRAMES = 30  # quiet frames before re-arm (~300 ms)
+  # Yield arm scaled by filtered driver torque
+  LCA_AUTH_YIELD_BASE = 60  # yield at the override threshold
+  LCA_AUTH_YIELD_SLOPE = 8  # yield drop per |drv| unit
+  LCA_AUTH_YIELD_MIN = 0  # min yield
+  LCA_AUTH_YIELD_LP_ALPHA = 0.04  # |drv| low-pass alpha
+  LCA_AUTH_SPLIT = 200  # symmetric to asymmetric handover
+  LCA_AUTH_REBUILD_RATE = 230  # counts/s
+  LCA_AUTH_COLLAPSE_RATE = 2500  # counts/s, scales with |drv|
 
-  # Angle limits for rate limiting
+  # Angle rate limits
   ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(
-    540, # deg - 1.5 turns to lock
-    ([0., 5., 25.], [2.5, 1.5, .2]),  # rate up limits at different speeds
-    ([0., 5., 25.], [5., 2., .3]),    # rate down limits at different speeds
+    540,  # deg, 1.5 turns to lock
+    ([0., 5., 25.], [2.5, 1.5, .2]),  # rate up vs speed
+    ([0., 5., 25.], [5., 2., .3]),  # rate down vs speed
   )
 
   C1_STEER_NO = 0
@@ -136,75 +98,66 @@ class CarControllerParams:
   EUCD_BLOCK_LEN = 8   # frames to block steering on a direction change
   EUCD_DEADZONE = 0.2  # deg, keep the previous direction inside it
   EUCD_BUTTON_BURST = 15  # frames per button press
-  EUCD_SNG_OP_RESUME_TIME = 0.5  # s of openpilot's resume request before it triggers the SNG resume
+  EUCD_SNG_OP_RESUME_TIME = 0.5  # s of openpilot resume before SNG
 
   # Longitudinal limits
   EUCD_ACCEL_MIN = -4.0  # m/s^2
   EUCD_ACCEL_MAX = 2.0   # m/s^2
 
-  # FSM3 mode hysteresis on OP accel (fit to the stock camera)
+  # FSM3 mode hysteresis on OP accel
   EUCD_BRAKE_ENTER = -0.50  # m/s^2
   EUCD_BRAKE_EXIT = -0.15
   EUCD_DRIVE_ENTER = 0.08
   EUCD_DRIVE_EXIT = 0.04
 
-  # FSM4 14-bit brake target vs accel (stock camera means), with and without the brake flag
+  # FSM4 14-bit brake target vs accel, with and without brake flag
   EUCD_FSM4_BRAKE_ACCEL_BP = [-3.5, -2.5, -1.75, -1.25, -0.8, -0.45, -0.2, 0.0, 0.2]
   EUCD_FSM4_BRAKE_VALUE_V = [12519, 12850, 12964, 13073, 13143, 13227, 13279, 13328, 13378]
   EUCD_FSM4_NO_BRAKE_ACCEL_BP = [-0.45, -0.2, 0.0, 0.2, 0.45, 0.8, 1.5]
   EUCD_FSM4_NO_BRAKE_VALUE_V = [13276, 13299, 13318, 13338, 13333, 13377, 13449]
 
-  # Brake acks to the camera (0x220 Byte_2 bit2, 0x299 Byte_5 bit3): masked while OP brakes alone, and this long after
+  # Camera brake acks, masked while OP brakes alone
   EUCD_CAM_BRAKE_MASK_MSGS = frozenset({0x220, 0x299})
   EUCD_CAM_BRAKE_MASK_HOLD_FRAMES = int(1.0 / DT_CTRL)
 
-  EUCD_CAM_ACK_RELEASE_VALUE = 13280  # spoofed 0x299 ack drops when the camera's FSM4 target reaches this (no braking)
+  EUCD_CAM_ACK_RELEASE_VALUE = 13280  # spoofed 0x299 ack released at this FSM4 target
 
   # Camera final stop behind a lead
   EUCD_CAMERA_STOPS_BEHIND_LEAD = True
-  EUCD_CAM_STOP_HANDOVER_SPEED = 10. * CV.KPH_TO_MS  # camera takes over below this, with a target
-  EUCD_CAM_STOP_RETURN_SPEED = 15. * CV.KPH_TO_MS    # OP takes back above this
-  EUCD_CAM_STOP_TRANSITION_TIME = 1.0  # s, blend between OP and camera
-  EUCD_OP_BRAKE_OVERRIDE_ACCEL = -0.3  # m/s^2, OP brakes if it wants less than this and the camera does not brake
-  EUCD_OP_BRAKE_OVERRIDE_MARGIN = 1.0  # m/s^2, OP brakes if it wants this much more than the camera
+  EUCD_CAM_STOP_HANDOVER_SPEED = 10. * CV.KPH_TO_MS  # camera stops below this, with a target
+  EUCD_CAM_STOP_RETURN_SPEED = 15. * CV.KPH_TO_MS  # OP takes back above this
+  EUCD_CAM_STOP_TRANSITION_TIME = 1.0  # s, OP/camera blend
+  EUCD_OP_BRAKE_OVERRIDE_ACCEL = -0.3  # OP brakes below this if the camera doesn't
+  EUCD_OP_BRAKE_OVERRIDE_MARGIN = 1.0  # OP brakes if this far below the camera
 
-  # The camera aborts (0x10) after ~3-6 s of its FSM3 mode 0 while the car gets another mode (routes 821-854),
-  # so FSM3 shows mode 0 whenever the camera does (mode bits only: FSM4 decides the hydraulic brake).
-  # Its hydraulic brake below CAMERA_BRAKE_HONOR_BELOW is followed at once (milder ones: ignored, ack spoofed).
-  EUCD_CAMERA_BRAKE_HONOR_BELOW = -2.0  # m/s^2
-  # BRAKE mode thresholds follow what coasting gives on the slope: lower uphill (route 858 braked on a 5° slope),
-  # higher downhill (route 85a coasted 3-7 km/h over the limit on a 1.5° descent)
-  EUCD_COAST_PITCH_GAIN = 5.65  # m/s^2 per sin(pitch), openpilot's coast fit
-  EUCD_DOWNHILL_BRAKE_OFFSET_MAX = 0.15  # m/s^2, keeps BRAKE exit (-0.15 + this) at or below 0
-  # Uphill, BRAKE is entered this much further below coast: OP's request overshoots the coast cap a little
-  # (route 85b, 5° climb: -1.1 vs -0.8 coast, hydraulic brake jerks)
+  # FSM3 mirrors camera mode 0; camera hydraulic brake followed below this
+  EUCD_CAMERA_BRAKE_HONOR_BELOW = -3.0  # m/s^2
+  # BRAKE thresholds shifted by the slope's coast accel
+  EUCD_COAST_PITCH_GAIN = 5.65  # m/s^2 per sin(pitch)
+  EUCD_DOWNHILL_BRAKE_OFFSET_MAX = 0.15  # m/s^2, downhill shift cap
+  # Extra uphill margin before BRAKE
   EUCD_UPHILL_BRAKE_ENTER_EXTRA = 0.6  # fraction of the uphill offset
-  # Mild decel goes in FSM3 mode 0 (no hydraulic brake), like the stock camera: in coast the ECM undershoots it
-  # (route 863: aEgo 0.1-0.3 above OP's -0.5..0 requests, accel/release cycles)
+  # Mild decel in FSM3 mode 0, no hydraulic brake
   EUCD_MODE0_BELOW = -0.05  # m/s^2
-  # Downhill coast tolerance over the ACC set speed, like the stock camera (up to ~+5 km/h without braking):
-  # downhill, between the set speed and set + tolerance, no camera target closer than the gap, OP's request
-  # above the max decel -> no hydraulic brake. Not active when SLC (or anything else) holds the car below the set.
+  # Downhill coast tolerance over the ACC set speed
   EUCD_COAST_TOLERANCE = 5. * CV.KPH_TO_MS
-  EUCD_COAST_TOLERANCE_MAX_DECEL = -1.0  # m/s^2, stronger requests brake as usual
-  EUCD_COAST_TOLERANCE_LEAD_GAP = 2.5    # s
-  EUCD_COAST_TOLERANCE_AT_SET = 1. * CV.KPH_TO_MS  # counts as cruising at the set speed from this much below it
+  EUCD_COAST_TOLERANCE_MAX_DECEL = -1.0  # m/s^2, stronger requests brake
+  EUCD_COAST_TOLERANCE_LEAD_GAP = 2.5  # s, no tolerance with a closer camera target
+  EUCD_COAST_TOLERANCE_AT_SET = 1. * CV.KPH_TO_MS  # below the set, still counted as at set
 
-  # Accel request ramps (jerk limits), like Toyota's +-4 m/s^3 and Ford's 3.5 m/s^3 brake onset: OP's request
-  # steps (route 865: +1.3 -> -0.4 in 0.5 s while following a departing lead) reach the ECM as ramps.
-  # The camera's hard brake (CAMERA_BRAKE_HONOR_BELOW) and its final stop are not limited.
-  EUCD_JERK_UP = 2.0          # m/s^3, accel rising
-  EUCD_JERK_DOWN_LIFT = 2.5   # m/s^3, accel falling while still positive (lifting off)
-  EUCD_JERK_DOWN_BRAKE = 4.0  # m/s^3, accel falling at or below 0 (braking deeper)
+  # Accel request ramps (jerk limits)
+  EUCD_JERK_UP = 2.0  # m/s^3, rising
+  EUCD_JERK_DOWN_LIFT = 2.5  # m/s^3, falling while positive
+  EUCD_JERK_DOWN_BRAKE = 4.0  # m/s^3, falling at or below 0
 
 
 class CANBUS:
   pt = 0
-  body = 1  # aux bus — carries Delphi ESR 2.5 radar (0x500..0x53F) and CEM dynamics
+  body = 1  # aux bus: Delphi ESR radar, CEM dynamics
   cam = 2
 
 
-# Delphi ESR 2.5 on aux bus (0x500-0x53F, 20Hz, 64 tracks); read directly so planner sees leads independently of stock FSM
+# Delphi ESR 2.5 on the aux bus, read directly
 RADAR_ESR = "ESR"
 
 
@@ -286,7 +239,7 @@ class CAR(Platforms):
     ),
   )
 
-  # Polestar 2 is technically CMA, but appears to use SPA DBC for CAN 1 bus
+  # Polestar 2 (CMA) uses the SPA DBC on CAN 1
   POLESTAR_2 = VolvoSPAPlatformConfig(
     [VolvoCarDocs("Polestar 2 2020-25")],
     CarSpecs(
@@ -302,7 +255,7 @@ class CAR(Platforms):
     VolvoEUCDCarSpecs(mass=1750, wheelbase=2.776),
   )
 
-# FW Query configuration for Volvo CMA platform
+# FW query for CMA (unused)
 # FW_QUERY_CONFIG = FwQueryConfig(
 #   requests=[
 #     Request(
@@ -317,7 +270,7 @@ VOLVO_VERSION_REQUEST = bytes([uds.SERVICE_TYPE.READ_DATA_BY_IDENTIFIER]) + \
 VOLVO_VERSION_RESPONSE = bytes([uds.SERVICE_TYPE.READ_DATA_BY_IDENTIFIER + 0x40]) + \
   p16(0xf1a2)
 
-# V60/EUCD is identified by the engine FW (its CAN fingerprint varies with equipment); V40/C1 by CAN fingerprint
+# V60 identified by engine FW, V40 by CAN fingerprint
 FW_QUERY_CONFIG = FwQueryConfig(
   requests=[
     Request(
