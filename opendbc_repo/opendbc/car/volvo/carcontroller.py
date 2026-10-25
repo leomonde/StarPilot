@@ -477,7 +477,7 @@ class CarController(CarControllerBase):
 
     return [
       create_eucd_radar(self.packer, CS.eucd_stock_FSM1),
-      create_eucd_longitudinal(self.packer, CS.eucd_stock_FSM3, accel, acc_check, self._eucd_fsm3_mode(CS, long_mode)),
+      create_eucd_longitudinal(self.packer, CS.eucd_stock_FSM3, accel, acc_check, self._eucd_fsm3_mode(CS, accel, long_mode)),
     ]
 
   def _eucd_long_decision(self, CC, CS):
@@ -509,7 +509,13 @@ class CarController(CarControllerBase):
       self.eucd_cam_brake_honor = self.eucd_cam_brake
       return accel, self.eucd_long_mode
 
-    self.eucd_long_mode = LongMode.BRAKE if self.eucd_cam_brake_honor else eucd_next_long_mode(self.eucd_long_mode, accel, brake_offset)
+    if self.eucd_cam_brake_honor:
+      self.eucd_long_mode = LongMode.BRAKE
+    else:
+      mode = eucd_next_long_mode(self.eucd_long_mode, accel, brake_offset)
+      if mode == LongMode.BRAKE and self.eucd_long_mode != LongMode.BRAKE and self._eucd_coast_tolerance(CC, CS, accel, brake_offset):
+        mode = LongMode.COAST
+      self.eucd_long_mode = mode
     return accel, self.eucd_long_mode
 
   # ---- Camera rules ----
@@ -524,12 +530,25 @@ class CarController(CarControllerBase):
     return min(accel, cam_accel) if self.eucd_cam_brake_honor else accel
 
   @staticmethod
-  def _eucd_fsm3_mode(CS, long_mode):
-    """Mode written to FSM3: mode 0 whenever the camera is in it, else OP's.
+  def _eucd_fsm3_mode(CS, accel, long_mode):
+    """Mode written to FSM3: mode 0 whenever the camera is in it or OP coasts with a mild decel, else OP's.
     FSM3 only: FSM4 and the brake-ack mask stay on OP's mode."""
-    if long_mode is not None and (int(CS.eucd_stock_FSM3["Byte_2"]) & 0x3) == LongMode.BRAKE:
+    if long_mode is None:
+      return None
+    if (int(CS.eucd_stock_FSM3["Byte_2"]) & 0x3) == LongMode.BRAKE:
+      return LongMode.BRAKE
+    if long_mode == LongMode.COAST and accel < CarControllerParams.EUCD_MODE0_BELOW:
       return LongMode.BRAKE
     return long_mode
+
+  @staticmethod
+  def _eucd_coast_tolerance(CC, CS, accel, brake_offset):
+    """Downhill at the ACC set speed: hold off the hydraulic brake up to set + COAST_TOLERANCE (stock-like)."""
+    CCP = CarControllerParams
+    v, set_speed = CS.out.vEgo, CC.hudControl.setSpeed
+    lead_close = CS.eucd_acc_distance < 255 and CS.eucd_acc_distance < v * CCP.EUCD_COAST_TOLERANCE_LEAD_GAP
+    return (brake_offset > 0. and not lead_close and accel > CCP.EUCD_COAST_TOLERANCE_MAX_DECEL and
+            set_speed - CCP.EUCD_COAST_TOLERANCE_AT_SET < v < set_speed + CCP.EUCD_COAST_TOLERANCE)
 
   @staticmethod
   def _eucd_slope_brake_offset(CC):

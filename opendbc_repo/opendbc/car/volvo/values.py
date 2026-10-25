@@ -179,6 +179,16 @@ class CarControllerParams:
   # Uphill, BRAKE is entered this much further below coast: OP's request overshoots the coast cap a little
   # (route 85b, 5° climb: -1.1 vs -0.8 coast, hydraulic brake jerks)
   EUCD_UPHILL_BRAKE_ENTER_EXTRA = 0.6  # fraction of the uphill offset
+  # Mild decel goes in FSM3 mode 0 (no hydraulic brake), like the stock camera: in coast the ECM undershoots it
+  # (route 863: aEgo 0.1-0.3 above OP's -0.5..0 requests, accel/release cycles)
+  EUCD_MODE0_BELOW = -0.05  # m/s^2
+  # Downhill coast tolerance over the ACC set speed, like the stock camera (up to ~+5 km/h without braking):
+  # downhill, between the set speed and set + tolerance, no camera target closer than the gap, OP's request
+  # above the max decel -> no hydraulic brake. Not active when SLC (or anything else) holds the car below the set.
+  EUCD_COAST_TOLERANCE = 5. * CV.KPH_TO_MS
+  EUCD_COAST_TOLERANCE_MAX_DECEL = -1.0  # m/s^2, stronger requests brake as usual
+  EUCD_COAST_TOLERANCE_LEAD_GAP = 2.5    # s
+  EUCD_COAST_TOLERANCE_AT_SET = 1. * CV.KPH_TO_MS  # counts as cruising at the set speed from this much below it
 
 
 class CANBUS:

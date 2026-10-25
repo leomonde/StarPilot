@@ -43,17 +43,24 @@ def fsm3(mode):
 
 @pytest.mark.parametrize("op_mode", [LongMode.BRAKE, LongMode.COAST, LongMode.DRIVE])
 def test_fsm3_mirrors_camera_mode_0(op_mode):
-  assert CarController._eucd_fsm3_mode(fsm3(LongMode.BRAKE), op_mode) == LongMode.BRAKE
+  assert CarController._eucd_fsm3_mode(fsm3(LongMode.BRAKE), 0.3, op_mode) == LongMode.BRAKE
 
 
 @pytest.mark.parametrize("cam_mode", [LongMode.COAST, LongMode.DRIVE])
 @pytest.mark.parametrize("op_mode", [LongMode.BRAKE, LongMode.COAST, LongMode.DRIVE])
 def test_fsm3_keeps_op_mode_otherwise(cam_mode, op_mode):
-  assert CarController._eucd_fsm3_mode(fsm3(cam_mode), op_mode) == op_mode
+  assert CarController._eucd_fsm3_mode(fsm3(cam_mode), 0.0, op_mode) == op_mode
+
+
+@pytest.mark.parametrize("cam_mode", [LongMode.COAST, LongMode.DRIVE])
+def test_fsm3_mode_0_for_mild_decel(cam_mode):
+  # route 863: in coast the ECM undershoots mild decel requests
+  assert CarController._eucd_fsm3_mode(fsm3(cam_mode), -0.2, LongMode.COAST) == LongMode.BRAKE
+  assert CarController._eucd_fsm3_mode(fsm3(cam_mode), -0.02, LongMode.COAST) == LongMode.COAST
 
 
 def test_fsm3_untouched_without_op_mode():
-  assert CarController._eucd_fsm3_mode(fsm3(LongMode.BRAKE), None) is None
+  assert CarController._eucd_fsm3_mode(fsm3(LongMode.BRAKE), 0.0, None) is None
 
 
 def offset(pitch_deg):
@@ -87,3 +94,23 @@ def test_downhill_brakes_earlier():
 def test_flat_unchanged():
   assert offset(0.) == 0.
   assert CarController._eucd_slope_brake_offset(SimpleNamespace(orientationNED=[])) == 0.
+
+
+KPH = 1 / 3.6
+
+
+def tolerance(v_kph, set_kph=110., accel=-0.5, pitch_deg=-2., lead_m=255):
+  CC = SimpleNamespace(hudControl=SimpleNamespace(setSpeed=set_kph * KPH))
+  CS = SimpleNamespace(out=SimpleNamespace(vEgo=v_kph * KPH), eucd_acc_distance=lead_m)
+  return CarController._eucd_coast_tolerance(CC, CS, accel, offset(pitch_deg))
+
+
+def test_coast_tolerance_downhill_over_set():
+  assert tolerance(110.5)
+  assert tolerance(114.)
+  assert not tolerance(115.5)          # above set + 5: brakes
+  assert not tolerance(90.)            # SLC (or a lead) holds the car below the set: no tolerance
+  assert not tolerance(112., pitch_deg=0.)   # flat
+  assert not tolerance(112., accel=-1.2)     # strong request
+  assert not tolerance(112., lead_m=40)      # camera target closer than 2.5 s
+  assert tolerance(112., lead_m=120)
