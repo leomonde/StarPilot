@@ -146,8 +146,8 @@ class CarControllerParams:
   # Extra uphill margin before BRAKE
   EUCD_UPHILL_BRAKE_ENTER_EXTRA = 0.6  # fraction of the uphill offset
   # Downhill coast tolerance over the ACC set speed
-  EUCD_COAST_TOLERANCE = 5. * CV.KPH_TO_MS
-  EUCD_COAST_TOLERANCE_MAX_DECEL = -1.0  # m/s^2, stronger requests brake
+  EUCD_COAST_TOLERANCE = 5. * CV.KPH_TO_MS  # brakes from set + this, releases at set
+  EUCD_COAST_TOLERANCE_MAX_DECEL = -1.5  # m/s^2, stronger requests brake
   EUCD_COAST_TOLERANCE_LEAD_GAP = 2.5  # s, no tolerance with a closer camera target
   EUCD_COAST_TOLERANCE_AT_SET = 1. * CV.KPH_TO_MS  # below the set, still counted as at set
 

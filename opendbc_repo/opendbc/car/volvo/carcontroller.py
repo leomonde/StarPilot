@@ -472,7 +472,7 @@ class CarController(CarControllerBase):
       self.eucd_long_mode = LongMode.BRAKE
     else:
       mode = eucd_next_long_mode(self.eucd_long_mode, accel, brake_offset)
-      if mode == LongMode.BRAKE and self.eucd_long_mode != LongMode.BRAKE and self._eucd_coast_tolerance(CC, CS, accel, brake_offset):
+      if mode == LongMode.BRAKE and self._eucd_coast_tolerance(CC, CS, accel, brake_offset, self.eucd_long_mode == LongMode.BRAKE):
         mode = LongMode.COAST
       self.eucd_long_mode = mode
     return accel, self.eucd_long_mode
@@ -513,13 +513,15 @@ class CarController(CarControllerBase):
     return long_mode
 
   @staticmethod
-  def _eucd_coast_tolerance(CC, CS, accel, brake_offset):
-    """Downhill coast tolerance over the ACC set speed."""
+  def _eucd_coast_tolerance(CC, CS, accel, brake_offset, braking=False):
+    """Downhill band over the ACC set speed: coast up to set + tolerance, brake back to set."""
     CCP = CarControllerParams
     v, set_speed = CS.out.vEgo, CC.hudControl.setSpeed
     lead_close = CS.eucd_acc_distance < 255 and CS.eucd_acc_distance < v * CCP.EUCD_COAST_TOLERANCE_LEAD_GAP
-    return (brake_offset > 0. and not lead_close and accel > CCP.EUCD_COAST_TOLERANCE_MAX_DECEL and
-            set_speed - CCP.EUCD_COAST_TOLERANCE_AT_SET < v < set_speed + CCP.EUCD_COAST_TOLERANCE)
+    if brake_offset <= 0. or lead_close or accel <= CCP.EUCD_COAST_TOLERANCE_MAX_DECEL:
+      return False
+    top = set_speed if braking else set_speed + CCP.EUCD_COAST_TOLERANCE
+    return set_speed - CCP.EUCD_COAST_TOLERANCE_AT_SET < v < top
 
   @staticmethod
   def _eucd_slope_brake_offset(CC):
