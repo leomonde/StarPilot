@@ -475,8 +475,10 @@ def eucd_fsm3_traction(accel: float, mode: LongMode) -> int:
   if mode == LongMode.BRAKE:
     return 0
   if mode == LongMode.DRIVE:
-    return min(max(round(89 * accel - 4), 0), 165)
-  return min(max(round(57 * accel - 15), -127), -1) & 0xFF
+    gain, offset = CarControllerParams.EUCD_TRACTION_DRIVE
+    return min(max(round(gain * accel + offset), 0), 255)
+  gain, offset = CarControllerParams.EUCD_TRACTION_COAST
+  return min(max(round(gain * accel + offset), -127), -1) & 0xFF
 
 
 def create_eucd_longitudinal(packer, stock_fsm3, accel, acc_check, mode: LongMode | None = None):

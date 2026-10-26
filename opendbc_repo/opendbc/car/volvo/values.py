@@ -110,6 +110,10 @@ class CarControllerParams:
   EUCD_DRIVE_ENTER = 0.08
   EUCD_DRIVE_EXIT = 0.04
 
+  # FSM3 Byte_3 traction = gain * accel + offset, as the camera sends it
+  EUCD_TRACTION_COAST = (94., -9.)
+  EUCD_TRACTION_DRIVE = (97., -6.)
+
   # FSM4 14-bit brake target vs accel, with and without brake flag
   EUCD_FSM4_BRAKE_ACCEL_BP = [-3.5, -2.5, -1.75, -1.25, -0.8, -0.45, -0.2, 0.0, 0.2]
   EUCD_FSM4_BRAKE_VALUE_V = [12519, 12850, 12964, 13073, 13143, 13227, 13279, 13328, 13378]
@@ -137,8 +141,6 @@ class CarControllerParams:
   EUCD_DOWNHILL_BRAKE_OFFSET_MAX = 0.15  # m/s^2, downhill shift cap
   # Extra uphill margin before BRAKE
   EUCD_UPHILL_BRAKE_ENTER_EXTRA = 0.6  # fraction of the uphill offset
-  # Mild decel in FSM3 mode 0, no hydraulic brake
-  EUCD_MODE0_BELOW = -0.05  # m/s^2
   # Downhill coast tolerance over the ACC set speed
   EUCD_COAST_TOLERANCE = 5. * CV.KPH_TO_MS
   EUCD_COAST_TOLERANCE_MAX_DECEL = -1.0  # m/s^2, stronger requests brake
@@ -204,7 +206,7 @@ class VolvoEUCDPlatformConfig(PlatformConfig):
 class VolvoEUCDCarSpecs(CarSpecs):
   steerRatio: float = 15.0
   centerToFrontRatio: float = 0.44
-  minSteerSpeed: float = 1.0
+  minSteerSpeed: float = 0.1
 
 
 class CAR(Platforms):

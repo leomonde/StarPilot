@@ -5,6 +5,7 @@ import pytest
 
 from opendbc.car.volvo.carcontroller import CarController
 from opendbc.car.volvo.values import CarControllerParams, LongMode
+from opendbc.car.volvo import volvocan
 from opendbc.car.volvo.volvocan import eucd_next_long_mode
 
 CCP = CarControllerParams
@@ -43,24 +44,25 @@ def fsm3(mode):
 
 @pytest.mark.parametrize("op_mode", [LongMode.BRAKE, LongMode.COAST, LongMode.DRIVE])
 def test_fsm3_mirrors_camera_mode_0(op_mode):
-  assert CarController._eucd_fsm3_mode(fsm3(LongMode.BRAKE), 0.3, op_mode) == LongMode.BRAKE
+  assert CarController._eucd_fsm3_mode(fsm3(LongMode.BRAKE), op_mode) == LongMode.BRAKE
 
 
 @pytest.mark.parametrize("cam_mode", [LongMode.COAST, LongMode.DRIVE])
 @pytest.mark.parametrize("op_mode", [LongMode.BRAKE, LongMode.COAST, LongMode.DRIVE])
 def test_fsm3_keeps_op_mode_otherwise(cam_mode, op_mode):
-  assert CarController._eucd_fsm3_mode(fsm3(cam_mode), 0.0, op_mode) == op_mode
+  assert CarController._eucd_fsm3_mode(fsm3(cam_mode), op_mode) == op_mode
 
 
-@pytest.mark.parametrize("cam_mode", [LongMode.COAST, LongMode.DRIVE])
-def test_fsm3_mode_0_for_mild_decel(cam_mode):
-  # Coast undershoots mild decel
-  assert CarController._eucd_fsm3_mode(fsm3(cam_mode), -0.2, LongMode.COAST) == LongMode.BRAKE
-  assert CarController._eucd_fsm3_mode(fsm3(cam_mode), -0.02, LongMode.COAST) == LongMode.COAST
+def test_traction_continuous_at_drive_switch():
+  # Coast and drive traction meet at the DRIVE threshold, like the camera
+  a = CCP.EUCD_DRIVE_ENTER
+  coast = volvocan.eucd_fsm3_traction(a, LongMode.COAST) - 256
+  drive = volvocan.eucd_fsm3_traction(a, LongMode.DRIVE)
+  assert drive - coast <= 6
 
 
 def test_fsm3_untouched_without_op_mode():
-  assert CarController._eucd_fsm3_mode(fsm3(LongMode.BRAKE), 0.0, None) is None
+  assert CarController._eucd_fsm3_mode(fsm3(LongMode.BRAKE), None) is None
 
 
 def offset(pitch_deg):

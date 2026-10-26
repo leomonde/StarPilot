@@ -70,10 +70,10 @@ def test_op_mode_keeps_cadence(kind, stock_mode, stock, mode):
 
 def test_traction():
   assert volvocan.eucd_fsm3_traction(-2.0, LongMode.BRAKE) == 0
-  assert volvocan.eucd_fsm3_traction(1.0, LongMode.DRIVE) == 85
-  assert volvocan.eucd_fsm3_traction(2.0, LongMode.DRIVE) == 165
+  assert volvocan.eucd_fsm3_traction(1.0, LongMode.DRIVE) == 91
+  assert volvocan.eucd_fsm3_traction(2.0, LongMode.DRIVE) == 188
   assert volvocan.eucd_fsm3_traction(-0.5, LongMode.DRIVE) == 0
-  assert volvocan.eucd_fsm3_traction(-0.1, LongMode.COAST) == 256 - 21
+  assert volvocan.eucd_fsm3_traction(-0.1, LongMode.COAST) == 256 - 18
   assert volvocan.eucd_fsm3_traction(0.5, LongMode.COAST) == 0xFF  # never non-negative in COAST
 
 

@@ -434,7 +434,7 @@ class CarController(CarControllerBase):
 
     return [
       create_eucd_radar(self.packer, CS.eucd_stock_FSM1),
-      create_eucd_longitudinal(self.packer, CS.eucd_stock_FSM3, accel, acc_check, self._eucd_fsm3_mode(CS, accel, long_mode)),
+      create_eucd_longitudinal(self.packer, CS.eucd_stock_FSM3, accel, acc_check, self._eucd_fsm3_mode(CS, long_mode)),
     ]
 
   def _eucd_long_decision(self, CC, CS):
@@ -494,13 +494,11 @@ class CarController(CarControllerBase):
     return min(accel, cam_accel) if self.eucd_cam_brake_honor else accel
 
   @staticmethod
-  def _eucd_fsm3_mode(CS, accel, long_mode):
-    """FSM3 mode: 0 when the camera or a mild OP decel is in it, else OP's."""
+  def _eucd_fsm3_mode(CS, long_mode):
+    """FSM3 mode: 0 when the camera is in it, else OP's."""
     if long_mode is None:
       return None
     if (int(CS.eucd_stock_FSM3["Byte_2"]) & 0x3) == LongMode.BRAKE:
-      return LongMode.BRAKE
-    if long_mode == LongMode.COAST and accel < CarControllerParams.EUCD_MODE0_BELOW:
       return LongMode.BRAKE
     return long_mode
 
