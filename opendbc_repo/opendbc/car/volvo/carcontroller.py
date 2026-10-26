@@ -444,6 +444,7 @@ class CarController(CarControllerBase):
     accel = min(max(actuators.accel, CCP.EUCD_ACCEL_MIN), CCP.EUCD_ACCEL_MAX)
     accel = self._eucd_jerk_limit(accel, self.eucd_accel)
     cam_accel = float(CS.eucd_stock_FSM3["ACC_AccelerationRequest"])
+    accel = self._eucd_camera_accel_cap(CS, accel, cam_accel)
     accel = self._eucd_camera_brake(accel, cam_accel)
     brake_offset = self._eucd_slope_brake_offset(CC)
 
@@ -484,6 +485,15 @@ class CarController(CarControllerBase):
     return min(max(accel, last_accel - down * dt), last_accel + CCP.EUCD_JERK_UP * dt)
 
   # ---- Camera rules ----
+
+  @staticmethod
+  def _eucd_camera_accel_cap(CS, accel, cam_accel):
+    """No more accel than the camera's while its target is close."""
+    CCP = CarControllerParams
+    close = max(CS.out.vEgo * CCP.EUCD_CAMERA_ACCEL_CAP_GAP, CCP.EUCD_CAMERA_ACCEL_CAP_MIN_DIST)
+    if CS.eucd_acc_distance >= min(close, 255):
+      return accel
+    return min(accel, max(cam_accel, CCP.EUCD_CAMERA_ACCEL_CAP_FLOOR))
 
   def _eucd_camera_brake(self, accel, cam_accel):
     """Follow the camera's hard brake, latched until it releases."""

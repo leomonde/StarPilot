@@ -128,14 +128,18 @@ class CarControllerParams:
 
   # Camera final stop behind a lead
   EUCD_CAMERA_STOPS_BEHIND_LEAD = True
-  EUCD_CAM_STOP_HANDOVER_SPEED = 10. * CV.KPH_TO_MS  # camera stops below this, with a target
-  EUCD_CAM_STOP_RETURN_SPEED = 15. * CV.KPH_TO_MS  # OP takes back above this
+  EUCD_CAM_STOP_HANDOVER_SPEED = 20. * CV.KPH_TO_MS  # camera stops below this, with a target
+  EUCD_CAM_STOP_RETURN_SPEED = 30. * CV.KPH_TO_MS  # OP takes back above this
   EUCD_CAM_STOP_TRANSITION_TIME = 1.0  # s, OP/camera blend
   EUCD_OP_BRAKE_OVERRIDE_ACCEL = -0.3  # OP brakes below this if the camera doesn't
   EUCD_OP_BRAKE_OVERRIDE_MARGIN = 1.0  # OP brakes if this far below the camera
 
   # FSM3 mirrors camera mode 0; camera hydraulic brake followed below this
   EUCD_CAMERA_BRAKE_HONOR_BELOW = -3.0  # m/s^2
+  # With a close camera target, OP accel capped at the camera's, not below the floor
+  EUCD_CAMERA_ACCEL_CAP_FLOOR = 0.0  # m/s^2
+  EUCD_CAMERA_ACCEL_CAP_GAP = 1.5  # s, camera target closer than this
+  EUCD_CAMERA_ACCEL_CAP_MIN_DIST = 10.  # m, at low speed
   # BRAKE thresholds shifted by the slope's coast accel
   EUCD_COAST_PITCH_GAIN = 5.65  # m/s^2 per sin(pitch)
   EUCD_DOWNHILL_BRAKE_OFFSET_MAX = 0.15  # m/s^2, downhill shift cap
