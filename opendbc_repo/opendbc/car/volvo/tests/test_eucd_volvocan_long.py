@@ -174,26 +174,26 @@ STOCK_133 = ["0b146e3cce370719", "0b2d6df6cdf60732"]
 
 @pytest.mark.parametrize("stock", [bytes.fromhex(h) for h in STOCK_323])
 def test_323_relay_to_camera(stock):
-  addr, dat, bus = volvocan.create_eucd_cam_brake_status(CANPacker(DBC), parse("NEW_MSG_323", MSG_323, 25, stock), False)
+  addr, dat, bus = volvocan.create_eucd_cam_brake_status(CANPacker(DBC), parse("BrakeStatus", MSG_323, 25, stock), False)
   assert (addr, dat, bus) == (MSG_323, stock, 2)
 
 
 @pytest.mark.parametrize("stock", [bytes.fromhex(h) for h in STOCK_323])
 def test_323_mask_clears_brake_ack(stock):
-  out = volvocan.create_eucd_cam_brake_status(CANPacker(DBC), parse("NEW_MSG_323", MSG_323, 25, stock), True)[1]
+  out = volvocan.create_eucd_cam_brake_status(CANPacker(DBC), parse("BrakeStatus", MSG_323, 25, stock), True)[1]
   assert out[4] == stock[4] & ~0x10  # 0xD5 -> 0xC5, others unchanged
   assert out[:4] == stock[:4] and out[5:] == stock[5:]
 
 
 @pytest.mark.parametrize("stock", [bytes.fromhex(h) for h in STOCK_133])
 def test_133_relay_to_camera(stock):
-  addr, dat, bus = volvocan.create_eucd_cam_brake_level(CANPacker(DBC), parse("NEW_MSG_133", MSG_133, 50, stock), None)
+  addr, dat, bus = volvocan.create_eucd_cam_brake_level(CANPacker(DBC), parse("BrakeLevel", MSG_133, 50, stock), None)
   assert (addr, dat, bus) == (MSG_133, stock, 2)
 
 
 @pytest.mark.parametrize("stock", [bytes.fromhex(h) for h in STOCK_133])
 def test_133_mask_holds_brake_level(stock):
-  out = volvocan.create_eucd_cam_brake_level(CANPacker(DBC), parse("NEW_MSG_133", MSG_133, 50, stock), 0x14)[1]
+  out = volvocan.create_eucd_cam_brake_level(CANPacker(DBC), parse("BrakeLevel", MSG_133, 50, stock), 0x14)[1]
   assert out[1] == (stock[1] & 0x80) | 0x14
   assert out[0] == stock[0] and out[2:] == stock[2:]
 
@@ -217,7 +217,7 @@ def test_220_relay_to_camera(stock, mask):
 @pytest.mark.parametrize("stock", [bytes.fromhex(h) for h in STOCK_299])
 @pytest.mark.parametrize("mask", [False, True])
 def test_299_relay_to_camera(stock, mask):
-  addr, dat, bus = volvocan.create_eucd_cam_brake_request_ack(CANPacker(DBC), parse("NEW_MSG_299", MSG_299, 50, stock), mask)
+  addr, dat, bus = volvocan.create_eucd_cam_brake_request_ack(CANPacker(DBC), parse("BrakeReqAck", MSG_299, 50, stock), mask)
   assert (addr, bus) == (MSG_299, 2)
   assert dat[5] == (stock[5] | 0x08 if mask else stock[5])  # 0xF7 -> 0xFF
   assert dat[:5] == stock[:5] and dat[6:] == stock[6:]
@@ -268,7 +268,7 @@ def test_220_spoofs_brake_request(stock):
 
 @pytest.mark.parametrize("stock", [bytes.fromhex(h) for h in STOCK_299])
 def test_299_spoofs_ack(stock):
-  dat = volvocan.create_eucd_cam_brake_request_ack(CANPacker(DBC), parse("NEW_MSG_299", MSG_299, 50, stock), False, True)[1]
+  dat = volvocan.create_eucd_cam_brake_request_ack(CANPacker(DBC), parse("BrakeReqAck", MSG_299, 50, stock), False, True)[1]
   assert dat[5] == stock[5] & ~0x08  # 0xFF -> 0xF7
   assert dat[:5] == stock[:5] and dat[6:] == stock[6:]
 

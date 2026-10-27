@@ -321,10 +321,10 @@ class CarState(CarStateBase):
     # Frames carcontroller relays 1:1
     self.eucd_stock_FSM0_frames = eucd_all_frames(cam_cp, "FSM0")
     self.eucd_stock_FSM4_frames = eucd_all_frames(cam_cp, "FSM4")
-    self.eucd_stock_133_frames = eucd_all_frames(pt_cp, "NEW_MSG_133")
-    self.eucd_stock_323_frames = eucd_all_frames(pt_cp, "NEW_MSG_323")
+    self.eucd_stock_133_frames = eucd_all_frames(pt_cp, "BrakeLevel")
+    self.eucd_stock_323_frames = eucd_all_frames(pt_cp, "BrakeStatus")
     self.eucd_stock_220_frames = eucd_all_frames(pt_cp, "wheelspeed1")
-    self.eucd_stock_299_frames = eucd_all_frames(pt_cp, "NEW_MSG_299")
+    self.eucd_stock_299_frames = eucd_all_frames(pt_cp, "BrakeReqAck")
 
     fp_ret = custom.StarPilotCarState.new_message()
     # TSR speed limit, 0 = no sign
@@ -365,10 +365,10 @@ class CarState(CarStateBase):
         ("EngineData", 66),
         ("CCButtons", 66),
         ("Gear_Info", 50),
-        ("NEW_MSG_133", 50),
-        ("NEW_MSG_323", 25),
+        ("BrakeLevel", 50),
+        ("BrakeStatus", 25),
         ("wheelspeed1", 50),
-        ("NEW_MSG_299", 50),
+        ("BrakeReqAck", 50),
       ]
       cam_messages = [
         ("FSM0", 100),

@@ -39,7 +39,7 @@ def test_op_braking_more_is_never_limited():
 
 
 def fsm3(mode):
-  return SimpleNamespace(eucd_stock_FSM3={"Byte_2": 0xD4 | mode})
+  return SimpleNamespace(eucd_stock_FSM3={"ACC_Mode": mode})
 
 
 @pytest.mark.parametrize("op_mode", [LongMode.BRAKE, LongMode.COAST, LongMode.DRIVE])

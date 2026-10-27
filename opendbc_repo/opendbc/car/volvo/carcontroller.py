@@ -403,14 +403,14 @@ class CarController(CarControllerBase):
     sends = []
     fsm4_mode = self.eucd_long_mode if (CC.longActive and not self.eucd_cam_relay) else None
     for stock_fsm4 in CS.eucd_stock_FSM4_frames:
-      self.eucd_cam_brake = bool(int(stock_fsm4["Byte_5"]) & 0x40)
+      self.eucd_cam_brake = bool(stock_fsm4["ACC_BrakeRequest"])
       sends.append(create_eucd_fsm4(self.packer, stock_fsm4, self.eucd_accel, fsm4_mode, cam_weight=self.eucd_cam_weight))
     return sends
 
   def _eucd_longitudinal(self, CC, CS):
     """Accel and mode, FSM1/FSM3 at 50 Hz."""
     if CS.eucd_stock_FSM4_frames:
-      self.eucd_cam_brake = bool(int(CS.eucd_stock_FSM4_frames[-1]["Byte_5"]) & 0x40)
+      self.eucd_cam_brake = bool(CS.eucd_stock_FSM4_frames[-1]["ACC_BrakeRequest"])
     if CC.longActive:
       accel, long_mode = self._eucd_long_decision(CC, CS)
     else:
@@ -457,7 +457,7 @@ class CarController(CarControllerBase):
     self.eucd_cam_weight = w
 
     if self.eucd_cam_relay:
-      cam_mode = int(CS.eucd_stock_FSM3["Byte_2"]) & 0x3
+      cam_mode = int(CS.eucd_stock_FSM3["ACC_Mode"])
       self.eucd_long_mode = LongMode(cam_mode) if cam_mode <= LongMode.DRIVE else LongMode.COAST
       self.eucd_cam_brake_honor = self.eucd_cam_brake
       return cam_accel, None
@@ -508,7 +508,7 @@ class CarController(CarControllerBase):
     """FSM3 mode: 0 when the camera is in it, else OP's."""
     if long_mode is None:
       return None
-    if (int(CS.eucd_stock_FSM3["Byte_2"]) & 0x3) == LongMode.BRAKE:
+    if int(CS.eucd_stock_FSM3["ACC_Mode"]) == LongMode.BRAKE:
       return LongMode.BRAKE
     return long_mode
 
@@ -562,13 +562,13 @@ class CarController(CarControllerBase):
     spoof_220, spoof_299 = (self.eucd_spoof_cam_ack and addr in masked for addr in (0x220, 0x299))
     if CS.eucd_stock_FSM4_frames:
       last_fsm4 = CS.eucd_stock_FSM4_frames[-1]
-      self.eucd_cam_brake_target = ((int(last_fsm4["Byte_5"]) << 8) | int(last_fsm4["Byte_6"])) & 0x3FFF
+      self.eucd_cam_brake_target = int(last_fsm4["ACC_BrakeTarget"])
     spoof_299 = spoof_299 and self.eucd_cam_brake_target < CCP.EUCD_CAM_ACK_RELEASE_VALUE
 
     sends = []
     for stock_133 in CS.eucd_stock_133_frames:
       if not mask_133:
-        self.eucd_brake_level_133 = int(stock_133["Byte_1"]) & 0x7F
+        self.eucd_brake_level_133 = int(stock_133["BrakeLevel"])
       sends.append(create_eucd_cam_brake_level(self.packer, stock_133, self.eucd_brake_level_133 if mask_133 else None))
     for stock_323 in CS.eucd_stock_323_frames:
       sends.append(create_eucd_cam_brake_status(self.packer, stock_323, mask_323))

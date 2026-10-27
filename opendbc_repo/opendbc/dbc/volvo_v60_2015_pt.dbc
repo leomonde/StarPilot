@@ -1,6 +1,5 @@
 VERSION ""
 
-
 NS_ :
     NS_DESC_
     CM_
@@ -53,8 +52,8 @@ BO_ 81 FSM0: 8 FSM
  SG_ ACC_BrakeAlert : 27|1@0+ (1,0) [0|1] "" XXX
  SG_ Byte_0 : 7|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_1 : 15|8@0+ (1,0) [0|255] "" XXX
- SG_ Byte_2 : 23|8@0+ (1,0) [0|255] "" XXX
- SG_ Byte_3 : 31|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_2_b7_3 : 23|5@0+ (1,0) [0|31] "" XXX
+ SG_ ACC_AbortCode : 31|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_4 : 39|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_5 : 47|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_6 : 55|8@0+ (1,0) [0|255] "" XXX
@@ -88,9 +87,10 @@ BO_ 298 EngineData: 8 XXX
  SG_ BrakePressed : 38|1@0+ (1,0) [0|1] "" XXX
  SG_ EngineRpm : 52|13@0+ (1,0) [0|8000] "" XXX
 
-BO_ 307 NEW_MSG_133: 8 XXX
+BO_ 307 BrakeLevel: 8 XXX
  SG_ Byte_0 : 7|8@0+ (1,0) [0|255] "" XXX
- SG_ Byte_1 : 15|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_1_b7 : 15|1@0+ (1,0) [0|1] "" XXX
+ SG_ BrakeLevel : 14|7@0+ (1,0) [0|127] "" XXX
  SG_ Byte_2 : 23|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_3 : 31|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_4 : 39|8@0+ (1,0) [0|255] "" XXX
@@ -138,7 +138,9 @@ BO_ 544 wheelspeed1: 8 BCM
  SG_ WhlSpdLR : 55|16@0+ (0.01,-327.68) [0|65535] "" XXX
  SG_ Byte_0 : 7|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_1 : 15|8@0+ (1,0) [0|255] "" XXX
- SG_ Byte_2 : 23|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_2_b7_3 : 23|5@0+ (1,0) [0|31] "" XXX
+ SG_ BrakeReqActive : 18|1@0+ (1,0) [0|1] "" XXX
+ SG_ Byte_2_b1_0 : 17|2@0+ (1,0) [0|3] "" XXX
  SG_ Byte_3 : 31|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_4 : 39|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_5 : 47|8@0+ (1,0) [0|255] "" XXX
@@ -161,7 +163,9 @@ BO_ 582 PSCM1: 8 PSCM
 BO_ 608 FSM1: 8 FSM
  SG_ ACC_Distance : 7|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_1 : 15|8@0+ (1,0) [0|255] "" XXX
- SG_ Byte_2 : 23|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_2_b7_3 : 23|5@0+ (1,0) [0|31] "" XXX
+ SG_ ACC_Braking : 18|1@0+ (1,0) [0|1] "" XXX
+ SG_ Byte_2_b1_0 : 17|2@0+ (1,0) [0|3] "" XXX
  SG_ Byte_3 : 31|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_4 : 39|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_5 : 47|8@0+ (1,0) [0|255] "" XXX
@@ -192,8 +196,11 @@ BO_ 624 FSM3: 8 FSM
  SG_ ACC_Check : 2|1@0+ (1,0) [0|1] "" XXX
  SG_ Byte_01 : 7|5@0+ (1,0) [0|31] "" XXX
  SG_ ACC_AccelerationRequest : 15|8@0+ (0.04,-5.04) [0|255] "" XXX
- SG_ Byte_2 : 23|8@0+ (1,0) [0|255] "" XXX
- SG_ Byte_3 : 31|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_2_b7_6 : 23|2@0+ (1,0) [0|3] "" XXX
+ SG_ ACC_NoTargetCancel : 21|1@0+ (1,0) [0|1] "" XXX
+ SG_ Byte_2_b4_2 : 20|3@0+ (1,0) [0|7] "" XXX
+ SG_ ACC_Mode : 17|2@0+ (1,0) [0|3] "" XXX
+ SG_ ACC_TractionRequest : 31|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_4 : 39|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_5 : 47|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_6 : 55|8@0+ (1,0) [0|255] "" XXX
@@ -213,29 +220,34 @@ BO_ 794 FSM4: 8 FSM
  SG_ Byte_2 : 23|8@0+ (1,0) [0|255] "" XXX
  SG_ ACC_LeadSpeed : 31|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_4 : 39|8@0+ (1,0) [0|255] "" XXX
- SG_ Byte_5 : 47|8@0+ (1,0) [0|255] "" XXX
- SG_ Byte_6 : 55|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_5_b7 : 47|1@0+ (1,0) [0|1] "" XXX
+ SG_ ACC_BrakeRequest : 46|1@0+ (1,0) [0|1] "" XXX
+ SG_ ACC_BrakeTarget : 45|14@0+ (1,0) [0|16383] "" XXX
  SG_ Byte_7 : 63|8@0+ (1,0) [0|255] "" XXX
 
-BO_ 665 NEW_MSG_299: 8 XXX
+BO_ 665 BrakeReqAck: 8 XXX
  SG_ Byte_0 : 7|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_1 : 15|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_2 : 23|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_3 : 31|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_4 : 39|8@0+ (1,0) [0|255] "" XXX
- SG_ Byte_5 : 47|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_5_b7_4 : 47|4@0+ (1,0) [0|15] "" XXX
+ SG_ BrakeReqNotAck : 43|1@0+ (1,0) [0|1] "" XXX
+ SG_ Byte_5_b2_0 : 42|3@0+ (1,0) [0|7] "" XXX
  SG_ Byte_6 : 55|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_7 : 63|8@0+ (1,0) [0|255] "" XXX
 
 BO_ 802 StartStop: 8 XXX
  SG_ StartStop : 8|1@0+ (1,0) [0|1] "" XXX
 
-BO_ 803 NEW_MSG_323: 8 XXX
+BO_ 803 BrakeStatus: 8 XXX
  SG_ Byte_0 : 7|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_1 : 15|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_2 : 23|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_3 : 31|8@0+ (1,0) [0|255] "" XXX
- SG_ Byte_4 : 39|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_4_b7_5 : 39|3@0+ (1,0) [0|7] "" XXX
+ SG_ BrakeApplied : 36|1@0+ (1,0) [0|1] "" XXX
+ SG_ Byte_4_b3_0 : 35|4@0+ (1,0) [0|15] "" XXX
  SG_ Byte_5 : 47|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_6 : 55|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_7 : 63|8@0+ (1,0) [0|255] "" XXX
@@ -328,6 +340,18 @@ BO_ 2015 diagGlobalReq: 8 XXX
  SG_ byte6 : 55|8@0+ (1,0) [0|255] "" XXX
  SG_ byte7 : 63|8@0+ (1,0) [0|255] "" XXX
 
+CM_ SG_ 81 ACC_AbortCode "0x10 generic abort, 0x04 latched fault";
+CM_ SG_ 608 ACC_Braking "Set while ACC brakes";
+CM_ SG_ 624 ACC_NoTargetCancel "Camera cancels: slow with no target";
+CM_ SG_ 624 ACC_Mode "0 brake, 1 coast, 2 drive";
+CM_ SG_ 624 ACC_TractionRequest "Signed in coast (negative = engine drag), unsigned in drive";
+CM_ SG_ 794 Byte_5_b7 "Always 1";
+CM_ SG_ 794 ACC_BrakeRequest "Hydraulic brake requested";
+CM_ SG_ 794 ACC_BrakeTarget "Brake target, lower = more braking";
+CM_ SG_ 307 BrakeLevel "Brake level seen by the camera";
+CM_ SG_ 544 BrakeReqActive "Brake request active, seen by the camera";
+CM_ SG_ 665 BrakeReqNotAck "Active low: 0 = car acknowledges the camera brake request";
+CM_ SG_ 803 BrakeApplied "Brake applied, seen by the camera";
 CM_ SG_ 16 SteeringDirection "0 = CCW, 1=CW (turning left or right of center)";
 CM_ SG_ 16 SteeringRateOfChange "Rate of change? Torque?";
 CM_ SG_ 81 ACC_Available "0=Acc Unavailable, 1=???, 2=Acc Ready, 3,4=???, 6= Acc Active, 7=Acc active tracking object (probably)";
