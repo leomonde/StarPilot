@@ -51,7 +51,7 @@ class CarInterface(CarInterfaceBase):
         ret.longitudinalActuatorDelay = 0.5  # FSM3 accel to aEgo delay
         # Integral-only accel loop
         ret.longitudinalTuning.kiBP = [0.]
-        ret.longitudinalTuning.kiV = [0.5]
+        ret.longitudinalTuning.kiV = [0.1]
 
     ret.pcmCruise = True
 
