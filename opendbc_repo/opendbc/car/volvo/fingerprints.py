@@ -40,6 +40,7 @@ FW_VERSIONS: dict[str, dict[tuple, list[bytes]]] = {
   CAR.VOLVO_V60: {
     (Ecu.engine, 0x7e0, None): [
       b'31361041 AJ\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00',
+      b'31441016 AA\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00',
     ],
   },
 }
