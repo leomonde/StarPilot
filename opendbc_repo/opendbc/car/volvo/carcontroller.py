@@ -56,7 +56,7 @@ class CarController(CarControllerBase):
     self.eucd_spoof_cam_ack = False
     self.eucd_cam_brake_target = 0
     self.eucd_cam_mask_frames = 0
-    self.eucd_brake_level_133 = 0
+    self.eucd_brake_level = 0
 
     self.gear_acc = 60
     self.lca_4_acc = 0  # Bresenham accumulator, 29 Hz
@@ -558,24 +558,25 @@ class CarController(CarControllerBase):
       self.eucd_cam_mask_frames -= 1
     mask = self.eucd_cam_mask_frames > 0
     masked = CCP.EUCD_CAM_BRAKE_MASK_MSGS
-    mask_133, mask_323, mask_220, mask_299 = (mask and addr in masked for addr in (0x133, 0x323, 0x220, 0x299))
-    spoof_220, spoof_299 = (self.eucd_spoof_cam_ack and addr in masked for addr in (0x220, 0x299))
+    mask_brake_level, mask_brake_status, mask_wheelspeed1, mask_brake_req_ack = (
+      mask and msg in masked for msg in ("BrakeLevel", "BrakeStatus", "wheelspeed1", "BrakeReqAck"))
+    spoof_wheelspeed1, spoof_brake_req_ack = (self.eucd_spoof_cam_ack and msg in masked for msg in ("wheelspeed1", "BrakeReqAck"))
     if CS.eucd_stock_FSM4_frames:
       last_fsm4 = CS.eucd_stock_FSM4_frames[-1]
       self.eucd_cam_brake_target = int(last_fsm4["ACC_BrakeTarget"])
-    spoof_299 = spoof_299 and self.eucd_cam_brake_target < CCP.EUCD_CAM_ACK_RELEASE_VALUE
+    spoof_brake_req_ack = spoof_brake_req_ack and self.eucd_cam_brake_target < CCP.EUCD_CAM_ACK_RELEASE_VALUE
 
     sends = []
-    for stock_133 in CS.eucd_stock_133_frames:
-      if not mask_133:
-        self.eucd_brake_level_133 = int(stock_133["BrakeLevel"])
-      sends.append(create_eucd_cam_brake_level(self.packer, stock_133, self.eucd_brake_level_133 if mask_133 else None))
-    for stock_323 in CS.eucd_stock_323_frames:
-      sends.append(create_eucd_cam_brake_status(self.packer, stock_323, mask_323))
-    for stock_220 in CS.eucd_stock_220_frames:
-      sends.append(create_eucd_cam_wheel_status(self.packer, stock_220, mask_220, spoof_220))
-    for stock_299 in CS.eucd_stock_299_frames:
-      sends.append(create_eucd_cam_brake_request_ack(self.packer, stock_299, mask_299, spoof_299))
+    for stock_brake_level in CS.eucd_stock_BrakeLevel_frames:
+      if not mask_brake_level:
+        self.eucd_brake_level = int(stock_brake_level["BrakeLevel"])
+      sends.append(create_eucd_cam_brake_level(self.packer, stock_brake_level, self.eucd_brake_level if mask_brake_level else None))
+    for stock_brake_status in CS.eucd_stock_BrakeStatus_frames:
+      sends.append(create_eucd_cam_brake_status(self.packer, stock_brake_status, mask_brake_status))
+    for stock_wheelspeed1 in CS.eucd_stock_wheelspeed1_frames:
+      sends.append(create_eucd_cam_wheel_status(self.packer, stock_wheelspeed1, mask_wheelspeed1, spoof_wheelspeed1))
+    for stock_brake_req_ack in CS.eucd_stock_BrakeReqAck_frames:
+      sends.append(create_eucd_cam_brake_request_ack(self.packer, stock_brake_req_ack, mask_brake_req_ack, spoof_brake_req_ack))
     return sends
 
   def _update_c1(self, CC, CS):

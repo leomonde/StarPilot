@@ -532,25 +532,25 @@ def create_eucd_fsm0(packer, stock_fsm0, ecm_engaged: bool):
   return packer.make_can_msg("FSM0", 0, values)
 
 
-def create_eucd_cam_brake_status(packer, stock_323, mask: bool):
-  # 0x323 to the camera; masked clears brake applied
-  values = _eucd_copy(stock_323)
+def create_eucd_cam_brake_status(packer, stock_brake_status, mask: bool):
+  # BrakeStatus to the camera; masked clears brake applied
+  values = _eucd_copy(stock_brake_status)
   if mask:
     values["BrakeApplied"] = 0
   return packer.make_can_msg("BrakeStatus", CANBUS.cam, values)
 
 
-def create_eucd_cam_brake_level(packer, stock_133, frozen_level: int | None):
-  # 0x133 to the camera; masked holds the brake level
-  values = _eucd_copy(stock_133)
+def create_eucd_cam_brake_level(packer, stock_brake_level, frozen_level: int | None):
+  # BrakeLevel to the camera; masked holds the brake level
+  values = _eucd_copy(stock_brake_level)
   if frozen_level is not None:
     values["BrakeLevel"] = frozen_level & 0x7F
   return packer.make_can_msg("BrakeLevel", CANBUS.cam, values)
 
 
-def create_eucd_cam_wheel_status(packer, stock_220, mask: bool, spoof: bool = False):
-  # 0x220 to the camera; brake request bit masked or spoofed
-  values = _eucd_copy(stock_220, skip=("WhlSpdRR", "WhlSpdLR"))
+def create_eucd_cam_wheel_status(packer, stock_wheelspeed1, mask: bool, spoof: bool = False):
+  # wheelspeed1 to the camera; brake request bit masked or spoofed
+  values = _eucd_copy(stock_wheelspeed1, skip=("WhlSpdRR", "WhlSpdLR"))
   if mask:
     values["BrakeReqActive"] = 0
   elif spoof:
@@ -558,9 +558,9 @@ def create_eucd_cam_wheel_status(packer, stock_220, mask: bool, spoof: bool = Fa
   return packer.make_can_msg("wheelspeed1", CANBUS.cam, values)
 
 
-def create_eucd_cam_brake_request_ack(packer, stock_299, mask: bool, spoof: bool = False):
-  # 0x299 to the camera; brake ack (active low) masked or spoofed
-  values = _eucd_copy(stock_299)
+def create_eucd_cam_brake_request_ack(packer, stock_brake_req_ack, mask: bool, spoof: bool = False):
+  # BrakeReqAck to the camera; brake ack (active low) masked or spoofed
+  values = _eucd_copy(stock_brake_req_ack)
   if mask:
     values["BrakeReqNotAck"] = 1
   elif spoof:

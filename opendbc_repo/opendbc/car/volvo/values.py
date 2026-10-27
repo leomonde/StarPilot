@@ -121,10 +121,10 @@ class CarControllerParams:
   EUCD_FSM4_NO_BRAKE_VALUE_V = [13276, 13299, 13318, 13338, 13333, 13377, 13449]
 
   # Camera brake acks, masked while OP brakes alone
-  EUCD_CAM_BRAKE_MASK_MSGS = frozenset({0x220, 0x299})
+  EUCD_CAM_BRAKE_MASK_MSGS = frozenset({"wheelspeed1", "BrakeReqAck"})
   EUCD_CAM_BRAKE_MASK_HOLD_FRAMES = int(1.0 / DT_CTRL)
 
-  EUCD_CAM_ACK_RELEASE_VALUE = 13280  # spoofed 0x299 ack released at this FSM4 target
+  EUCD_CAM_ACK_RELEASE_VALUE = 13280  # spoofed BrakeReqAck released at this FSM4 target
 
   # Camera final stop behind a lead
   EUCD_CAMERA_STOPS_BEHIND_LEAD = True
