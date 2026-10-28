@@ -109,18 +109,22 @@ class CarControllerParams:
   # and sends FSM0/FSM3/FSM4 from the camera's last clean frames until it drives off.
   EUCD_NO_TARGET_STOP = True
   EUCD_NO_TARGET_STOP_SIM_ONLY = True  # only on the simulated red light (start/stop)
-  EUCD_NO_TARGET_STOP_ENTER_SPEED = 20. * CV.KPH_TO_MS  # starts below this, no target
+  EUCD_NO_TARGET_STOP_ENTER_SPEED = 60. * CV.KPH_TO_MS  # starts below this, no target
   EUCD_NO_TARGET_STOP_EXIT_SPEED = 30. * CV.KPH_TO_MS  # camera frames back above this
   EUCD_STOPPING_FLAG_SPEED = 2.6 * CV.KPH_TO_MS  # FSM4 b1 F1 -> F9 below this
   EUCD_HOLD_RELEASE_FRAMES = int(0.05 / DT_CTRL)  # brake request released after the car's hold
   EUCD_STANDSTILL_DELAY = 3.0  # s stopped before FSM3 ACC_Standstill
   EUCD_HOLD_ACCEL = -0.08  # m/s^2, FSM3 accel while the car holds (raw 0x7C)
   EUCD_GO_RETRY_TIME = 2.0  # s still stopped after the resume burst -> standstill again, retry
-  # The camera stays cancelled after the stop (FSM0 82/0x10); resume on its bus re-engages it
-  EUCD_CAM_RESYNC_SPEED = 32. * CV.KPH_TO_MS  # resume to the camera above this (its ACC minimum is 30)
-  EUCD_CAM_RESYNC_PERIOD = int(1.0 / DT_CTRL)  # frames between resume bursts
-  EUCD_CAM_RESYNC_TIMEOUT = 8.0  # s; then the camera's frames back to the ECM (ACC drops, as before)
-  EUCD_CAM_CLEAN_FRAMES = int(0.3 / DT_CTRL)  # camera clean this long -> its frames back to the ECM
+  # The camera is shown the driver's side of it: ACC standby (EngineData, 0x325) for the whole stop, so it never
+  # aborts nor alerts. It follows the ECM's ACC state (route 881), so it re-engages like on the driver's Set:
+  # Set on its bus, then EngineData engaged again 30 ms later
+  EUCD_CAM_RESYNC_SPEED = 32. * CV.KPH_TO_MS  # re-engage above this (its ACC minimum is 30)
+  EUCD_CAM_SET_FRAMES = int(0.07 / DT_CTRL)  # Set press to the camera, like the driver's
+  EUCD_CAM_SPOOF_RELEASE_FRAMES = int(0.03 / DT_CTRL)  # EngineData engaged again this long after the Set
+  EUCD_CAM_RESYNC_RETRY = 2.0  # s without the camera back -> standby again for 1 s, Set again
+  EUCD_CAM_RESYNC_ATTEMPTS = 3  # then the camera's frames back to the ECM (ACC drops)
+  EUCD_CAM_CLEAN_FRAMES = int(0.3 / DT_CTRL)  # camera engaged and clean this long -> its frames back to the ECM
 
   # Longitudinal limits
   EUCD_ACCEL_MIN = -4.0  # m/s^2

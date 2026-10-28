@@ -3,7 +3,7 @@ import numpy as np
 from opendbc.car.volvo.helpers import (checksum_lca_2_message, checksum_2_0x69_message, checksum_1_pscm_related_message,
                                        checksum_2_pscm_related_message, checksum_lca_5_message)
 from opendbc.car.carlog import carlog
-from opendbc.car.volvo.values import CANBUS, CarControllerParams, LongMode
+from opendbc.car.volvo.values import CANBUS, CarControllerParams, EcmAccState, LongMode
 
 
 def create_c1_pscm_message(packer, msg_pscm: dict):
@@ -573,6 +573,31 @@ def create_eucd_cam_brake_request_ack(packer, stock_brake_req_ack, mask: bool, s
   if hide_hold:
     values["Byte_0"] = int(values["Byte_0"]) & ~0x80
   return packer.make_can_msg("BrakeReqAck", CANBUS.cam, values)
+
+
+def create_eucd_cam_button(packer, stock_ccbuttons, set_plus: bool):
+  # CEM's CCButtons to the camera with Set pressed; the other bytes as the CEM's (the camera rejects zeroed ones)
+  values = _eucd_copy(stock_ccbuttons)
+  if set_plus:
+    values |= {"ACCSetBtn": 1, "ACCSetBtnInv": 0}
+  return packer.make_can_msg("CCButtons", CANBUS.cam, values)
+
+
+def create_eucd_cam_engine_data(packer, stock_engine_data, show_standby: bool):
+  # EngineData to the camera; show_standby: ECM engaged shown as standby (driver cancelled), as in route 881
+  values = _eucd_copy(stock_engine_data)
+  if show_standby and int(values["ACC_State_ECM"]) == EcmAccState.ENGAGED:
+    values["ACC_State_ECM"] = EcmAccState.STANDBY
+    values["Byte_2"] = int(values["Byte_2"]) & ~0x20  # E7 -> C7
+  return packer.make_can_msg("EngineData", CANBUS.cam, values)
+
+
+def create_eucd_cam_acc_hold(packer, stock_acc_hold, show_standby: bool):
+  # 0x325 to the camera; show_standby: no ACC engaged (C4) nor ACC standstill hold (87), as standby (84)
+  values = _eucd_copy(stock_acc_hold)
+  if show_standby:
+    values["Byte_0"] = int(values["Byte_0"]) & ~0x43
+  return packer.make_can_msg("AccHold", CANBUS.cam, values)
 
 
 def create_eucd_cam_brake_hold(packer, stock_brake_hold, frozen_b0: int | None):

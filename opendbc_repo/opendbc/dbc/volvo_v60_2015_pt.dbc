@@ -75,6 +75,18 @@ BO_ 295 CCButtons: 8 CEM
  SG_ ACCOnOffBtn : 59|1@0+ (1,0) [0|1] "" XXX
  SG_ ACCResumeBtn : 61|1@0+ (1,0) [0|1] "" XXX
  SG_ ACCSetBtn : 63|1@0+ (1,0) [0|1] "" XXX
+ SG_ Byte_0 : 7|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_1 : 15|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_2 : 23|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_3 : 31|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_4_b7_3 : 39|5@0+ (1,0) [0|31] "" XXX
+ SG_ Byte_5_b6 : 46|1@0+ (1,0) [0|1] "" XXX
+ SG_ Byte_5_b4 : 44|1@0+ (1,0) [0|1] "" XXX
+ SG_ Byte_5_b2_0 : 42|3@0+ (1,0) [0|7] "" XXX
+ SG_ Byte_6_b7_3 : 55|5@0+ (1,0) [0|31] "" XXX
+ SG_ Byte_7_b6 : 62|1@0+ (1,0) [0|1] "" XXX
+ SG_ Byte_7_b4 : 60|1@0+ (1,0) [0|1] "" XXX
+ SG_ Byte_7_b2_0 : 58|3@0+ (1,0) [0|7] "" XXX
 
 BO_ 298 EngineData: 8 XXX
  SG_ NEW_SIGNAL_1 : 1|10@0+ (1,0) [0|1023] "" XXX
@@ -86,6 +98,11 @@ BO_ 298 EngineData: 8 XXX
  SG_ ACC_State_ECM : 37|2@0+ (1,0) [0|3] "" XXX
  SG_ BrakePressed : 38|1@0+ (1,0) [0|1] "" XXX
  SG_ EngineRpm : 52|13@0+ (1,0) [0|8000] "" XXX
+ SG_ Byte_0_b7_3 : 7|5@0+ (1,0) [0|31] "" XXX
+ SG_ Byte_2 : 23|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_3_b7_2 : 31|6@0+ (1,0) [0|63] "" XXX
+ SG_ Byte_4_b7 : 39|1@0+ (1,0) [0|1] "" XXX
+ SG_ Byte_6_b7_5 : 55|3@0+ (1,0) [0|7] "" XXX
 
 BO_ 307 BrakeLevel: 8 XXX
  SG_ Byte_0 : 7|8@0+ (1,0) [0|255] "" XXX
@@ -250,6 +267,16 @@ BO_ 665 BrakeReqAck: 8 XXX
 BO_ 802 StartStop: 8 XXX
  SG_ StartStop : 8|1@0+ (1,0) [0|1] "" XXX
 
+BO_ 805 AccHold: 8 XXX
+ SG_ Byte_0 : 7|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_1 : 15|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_2 : 23|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_3 : 31|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_4 : 39|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_5 : 47|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_6 : 55|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_7 : 63|8@0+ (1,0) [0|255] "" XXX
+
 BO_ 803 BrakeStatus: 8 XXX
  SG_ Byte_0 : 7|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_1 : 15|8@0+ (1,0) [0|255] "" XXX
@@ -362,6 +389,8 @@ CM_ SG_ 307 BrakeLevel "Brake level seen by the camera";
 CM_ SG_ 544 BrakeReqActive "Brake request active, seen by the camera";
 CM_ SG_ 665 BrakeReqNotAck "Active low: 0 = car acknowledges the camera brake request";
 CM_ SG_ 803 BrakeApplied "Brake applied, seen by the camera";
+CM_ SG_ 805 Byte_0 "0xC4 ACC engaged moving, 0x84 not, 0x87 ACC standstill hold (routes 807, 881)";
+CM_ SG_ 298 Byte_2 "bit5 set while ACC engaged and moving (E7), clear at standstill or standby (C7)";
 CM_ SG_ 511 Byte_0 "0x70 -> 0xD0 ~4.4 s into a stop: brake hold state change (routes 807, 87b)";
 CM_ SG_ 16 SteeringDirection "0 = CCW, 1=CW (turning left or right of center)";
 CM_ SG_ 16 SteeringRateOfChange "Rate of change? Torque?";

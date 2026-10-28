@@ -29,6 +29,7 @@
 #define VOLVO_EUCD_WHEELSPEED1   0x220U  // TX by OP to camera, rear wheel speeds + brake request active
 #define VOLVO_EUCD_BRAKE_REQ_ACK 0x299U  // TX by OP to camera, brake request ack
 #define VOLVO_EUCD_BRAKE_HOLD    0x1FFU  // TX by OP to camera, brake hold state (masked in OP's no-target stop)
+#define VOLVO_EUCD_ACC_HOLD      0x325U  // TX by OP to camera, ECM ACC hold state (shown as standby in OP's no-target stop)
 #define VOLVO_EUCD_FSM1          0x260U  // TX by OP, ACC radar/distance message (oplong)
 #define VOLVO_EUCD_FSM2          0x262U  // TX by OP, LKA command
 #define VOLVO_EUCD_FSM3          0x270U  // TX by OP, ACC accel request + status
@@ -171,7 +172,7 @@ static bool volvo_eucd_fwd_hook(int bus_num, int addr) {
 static safety_config volvo_eucd_init(void) {
   static const CanMsg VOLVO_EUCD_TX_MSGS[] = {
     {VOLVO_EUCD_CCButtons, VOLVO_MAIN_BUS,  8, .check_relay = false},
-    {VOLVO_EUCD_CCButtons, VOLVO_PARTY_BUS, 8, .check_relay = false},  // resume to the camera, re-engages its ACC
+    {VOLVO_EUCD_CCButtons, VOLVO_PARTY_BUS, 8, .check_relay = false},  // Set to the camera, re-engages its ACC
     {VOLVO_EUCD_PSCM1,     VOLVO_PARTY_BUS, 8, .check_relay = true},   // OP replaces stock steering servo state
     // car -> camera, relayed by OP
     {VOLVO_EUCD_BRAKE_LEVEL,   VOLVO_PARTY_BUS, 8, .check_relay = true},
@@ -179,6 +180,8 @@ static safety_config volvo_eucd_init(void) {
     {VOLVO_EUCD_WHEELSPEED1,   VOLVO_PARTY_BUS, 8, .check_relay = true},
     {VOLVO_EUCD_BRAKE_REQ_ACK, VOLVO_PARTY_BUS, 8, .check_relay = true},
     {VOLVO_EUCD_BRAKE_HOLD,    VOLVO_PARTY_BUS, 8, .check_relay = true},
+    {VOLVO_EUCD_ACC_HOLD,      VOLVO_PARTY_BUS, 8, .check_relay = true},
+    {VOLVO_EUCD_EngineData,    VOLVO_PARTY_BUS, 8, .check_relay = true},  // camera sees ACC standby in OP's no-target stop
     {VOLVO_EUCD_FSM2,      VOLVO_MAIN_BUS, 8, .check_relay = true},   // OP replaces stock LKA command
     // FSM1/FSM3: camera's pass through while OP does not control (relay delay faults the ECM)
     {VOLVO_EUCD_FSM1,      VOLVO_MAIN_BUS, 8, .check_relay = false},

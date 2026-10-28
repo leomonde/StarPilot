@@ -14,9 +14,10 @@ from opendbc.car.volvo.volvocan import (create_c1_cancel, create_c1_pscm_message
                                         create_eucd_button_msg, create_eucd_lka_msg, create_eucd_lkas_state_msg, create_eucd_longitudinal,
                                         create_eucd_fsm0, create_eucd_fsm4, create_eucd_radar, create_eucd_cam_brake_level,
                                         create_eucd_cam_brake_status, create_eucd_cam_wheel_status, create_eucd_cam_brake_request_ack,
-                                        create_eucd_cam_brake_hold,
+                                        create_eucd_cam_brake_hold, create_eucd_cam_button, create_eucd_cam_engine_data,
+                                        create_eucd_cam_acc_hold,
                                         eucd_fsm4_brake_value, eucd_next_long_mode)
-from opendbc.car.volvo.values import CAR, CANBUS, CarControllerParams, LongMode, SteerDirection, VolvoC1PlatformConfig, VolvoEUCDPlatformConfig
+from opendbc.car.volvo.values import CAR, CarControllerParams, LongMode, SteerDirection, VolvoC1PlatformConfig, VolvoEUCDPlatformConfig
 
 LongCtrlState = structs.CarControl.Actuators.LongControlState
 
@@ -71,8 +72,11 @@ class CarController(CarControllerBase):
     self.eucd_nt_standstill = False
     self.eucd_nt_stopping = False
     self.eucd_nt_holding = False
-    self.eucd_nt_resync_frames = 0  # frames resyncing the camera after the drive-off
+    self.eucd_nt_cam_standby = False  # camera shown ACC standby (EngineData, 0x325)
+    self.eucd_nt_resync_frames = 0  # frames re-engaging the camera after the drive-off
+    self.eucd_nt_resync_attempts = 0
     self.eucd_nt_clean_frames = 0
+    self.eucd_cam_set_frames = 0  # Set press to the camera, frames left
     self.eucd_brake_hold_b0: int | None = None
     # Camera's last clean frames: FSM0 by Byte_0, FSM3 data/type, FSM4
     self.eucd_tpl_fsm0: dict[int, dict] = {}
@@ -477,11 +481,13 @@ class CarController(CarControllerBase):
     have_templates = self.eucd_tpl_fsm0 and len(self.eucd_tpl_fsm3) == 2 and self.eucd_tpl_fsm4 is not None
     if not CC.longActive or (v > CCP.EUCD_NO_TARGET_STOP_EXIT_SPEED and not self.eucd_nt_cam_aborted):
       self._eucd_reset_no_target_stop()
-    elif self.eucd_nt_cam_aborted and v > CCP.EUCD_CAM_RESYNC_SPEED:
-      self._eucd_resync_camera(cancelled, can_sends)
+    elif self.eucd_nt_cam_aborted and (self.eucd_nt_going or not allowed) and v > CCP.EUCD_CAM_RESYNC_SPEED:
+      # Driven off after the stop, or green before stopping
+      self._eucd_resync_camera(cancelled)
     elif (not self.eucd_nt_active and allowed and have_templates and not cancelled and
           CS.eucd_acc_distance >= 255 and v < CCP.EUCD_NO_TARGET_STOP_ENTER_SPEED):
-      self.eucd_nt_active = True
+      # From now on the ECM gets the camera's last clean frames from OP, and the camera sees ACC standby
+      self.eucd_nt_active = self.eucd_nt_cam_aborted = self.eucd_nt_cam_standby = True
 
     if self.eucd_nt_active:
       self.eucd_nt_cam_aborted |= cancelled
@@ -518,22 +524,33 @@ class CarController(CarControllerBase):
     CS.eucd_no_target_stop = self.eucd_nt_active
     CS.eucd_op_standstill = self.eucd_nt_standstill
 
-  def _eucd_resync_camera(self, cancelled, can_sends):
-    """After the drive-off: resume on the camera's bus until its ACC is back, then its frames to the ECM."""
+  def _eucd_resync_camera(self, cancelled):
+    """After the drive-off: the camera re-engaged like on the driver's Set, then its frames back to the ECM."""
     CCP = CarControllerParams
-    self.eucd_nt_clean_frames = 0 if cancelled else self.eucd_nt_clean_frames + 1
-    if self.eucd_nt_clean_frames >= CCP.EUCD_CAM_CLEAN_FRAMES or self.eucd_nt_resync_frames * DT_CTRL > CCP.EUCD_CAM_RESYNC_TIMEOUT:
-      self._eucd_reset_no_target_stop()
-      return
-    if cancelled and self.eucd_nt_resync_frames % CCP.EUCD_CAM_RESYNC_PERIOD == 0:
-      can_sends.extend([create_eucd_button_msg(self.packer, resume=True, bus=CANBUS.cam)] * CCP.EUCD_BUTTON_BURST)
+    if self.eucd_nt_resync_frames == 0:
+      self.eucd_cam_set_frames = CCP.EUCD_CAM_SET_FRAMES
+    elif self.eucd_nt_resync_frames == CCP.EUCD_CAM_SPOOF_RELEASE_FRAMES:
+      self.eucd_nt_cam_standby = False  # the camera sees the ECM go engaged
     self.eucd_nt_resync_frames += 1
+
+    self.eucd_nt_clean_frames = 0 if (cancelled or self.eucd_nt_cam_standby) else self.eucd_nt_clean_frames + 1
+    if self.eucd_nt_clean_frames >= CCP.EUCD_CAM_CLEAN_FRAMES:
+      self._eucd_reset_no_target_stop()
+    elif self.eucd_nt_resync_frames * DT_CTRL > CCP.EUCD_CAM_RESYNC_RETRY:
+      self.eucd_nt_resync_attempts += 1
+      if self.eucd_nt_resync_attempts >= CCP.EUCD_CAM_RESYNC_ATTEMPTS:
+        self._eucd_reset_no_target_stop()
+      else:
+        # Standby again for 1 s, then Set again
+        self.eucd_nt_cam_standby = True
+        self.eucd_nt_resync_frames = -int(1.0 / DT_CTRL)
 
   def _eucd_reset_no_target_stop(self):
     self.eucd_nt_active = self.eucd_nt_cam_aborted = self.eucd_nt_going = False
     self.eucd_nt_standstill = self.eucd_nt_stopping = self.eucd_nt_holding = False
     self.eucd_nt_still_frames = self.eucd_nt_hold_frames = 0
-    self.eucd_nt_resync_frames = self.eucd_nt_clean_frames = 0
+    self.eucd_nt_cam_standby = False
+    self.eucd_nt_resync_frames = self.eucd_nt_resync_attempts = self.eucd_nt_clean_frames = 0
 
   def _eucd_nt_fsm3(self, CS):
     """FSM3 base: the camera's, or its clean template (same data/type cadence) once it cancelled."""
@@ -724,6 +741,14 @@ class CarController(CarControllerBase):
       sends.append(create_eucd_cam_wheel_status(self.packer, stock_wheelspeed1, mask_wheelspeed1, spoof_wheelspeed1, hide_hold=mask))
     for stock_brake_req_ack in CS.eucd_stock_BrakeReqAck_frames:
       sends.append(create_eucd_cam_brake_request_ack(self.packer, stock_brake_req_ack, mask_brake_req_ack, spoof_brake_req_ack, hide_hold=mask))
+    # EngineData and 0x325 always relayed (the panda blocks them); ACC standby while the camera is shown it
+    for stock_engine_data in CS.eucd_stock_EngineData_frames:
+      sends.append(create_eucd_cam_engine_data(self.packer, stock_engine_data, self.eucd_nt_cam_standby))
+    for stock_acc_hold in CS.eucd_stock_AccHold_frames:
+      sends.append(create_eucd_cam_acc_hold(self.packer, stock_acc_hold, self.eucd_nt_cam_standby))
+    if self.eucd_cam_set_frames > 0:
+      self.eucd_cam_set_frames -= 1
+      sends.append(create_eucd_cam_button(self.packer, CS.eucd_stock_CCButtons, set_plus=True))
     # 0x1FF b0 held from the stop on, while stopped in the no-target stop
     hold_mask = self.eucd_nt_active and CS.out.standstill
     for stock_brake_hold in CS.eucd_stock_BrakeHold_frames:
