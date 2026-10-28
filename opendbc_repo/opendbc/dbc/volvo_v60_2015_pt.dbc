@@ -123,6 +123,16 @@ BO_ 465 Gear_Info: 8 XXX
  SG_ NEW_SIGNAL_1 : 55|16@0+ (1,0) [0|4095] "" XXX
  SG_ Gear : 31|8@0+ (1,0) [0|255] "" XXX
 
+BO_ 511 BrakeHold: 8 XXX
+ SG_ Byte_0 : 7|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_1 : 15|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_2 : 23|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_3 : 31|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_4 : 39|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_5 : 47|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_6 : 55|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_7 : 63|8@0+ (1,0) [0|255] "" XXX
+
 BO_ 522 Brake_Info: 8 XXX
  SG_ NEW_SIGNAL_2 : 1|1@0+ (1,0) [0|1] "" XXX
  SG_ COUNTER : 11|4@0+ (1,0) [0|15] "" XXX
@@ -352,6 +362,7 @@ CM_ SG_ 307 BrakeLevel "Brake level seen by the camera";
 CM_ SG_ 544 BrakeReqActive "Brake request active, seen by the camera";
 CM_ SG_ 665 BrakeReqNotAck "Active low: 0 = car acknowledges the camera brake request";
 CM_ SG_ 803 BrakeApplied "Brake applied, seen by the camera";
+CM_ SG_ 511 Byte_0 "0x70 -> 0xD0 ~4.4 s into a stop: brake hold state change (routes 807, 87b)";
 CM_ SG_ 16 SteeringDirection "0 = CCW, 1=CW (turning left or right of center)";
 CM_ SG_ 16 SteeringRateOfChange "Rate of change? Torque?";
 CM_ SG_ 81 ACC_Available "0=Acc Unavailable, 1=???, 2=Acc Ready, 3,4=???, 6= Acc Active, 7=Acc active tracking object (probably)";

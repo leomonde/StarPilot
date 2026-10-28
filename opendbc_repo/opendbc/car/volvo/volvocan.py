@@ -575,6 +575,14 @@ def create_eucd_cam_brake_request_ack(packer, stock_brake_req_ack, mask: bool, s
   return packer.make_can_msg("BrakeReqAck", CANBUS.cam, values)
 
 
+def create_eucd_cam_brake_hold(packer, stock_brake_hold, frozen_b0: int | None):
+  # 0x1FF to the camera; b0 held during OP's no-target stop (its 0x70 -> 0xD0 fires the camera's brake alert)
+  values = _eucd_copy(stock_brake_hold)
+  if frozen_b0 is not None:
+    values["Byte_0"] = frozen_b0
+  return packer.make_can_msg("BrakeHold", CANBUS.cam, values)
+
+
 def create_eucd_radar(packer, stock_fsm1, mode: LongMode | None = None):
   # Camera FSM1; ACC_Braking follows OP braking
   values = _eucd_copy(stock_fsm1)

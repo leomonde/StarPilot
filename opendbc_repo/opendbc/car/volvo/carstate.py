@@ -335,6 +335,7 @@ class CarState(CarStateBase):
     self.eucd_stock_BrakeStatus_frames = eucd_all_frames(pt_cp, "BrakeStatus")
     self.eucd_stock_wheelspeed1_frames = eucd_all_frames(pt_cp, "wheelspeed1")
     self.eucd_stock_BrakeReqAck_frames = eucd_all_frames(pt_cp, "BrakeReqAck")
+    self.eucd_stock_BrakeHold_frames = eucd_all_frames(pt_cp, "BrakeHold")
 
     fp_ret = custom.StarPilotCarState.new_message()
     # TSR speed limit, 0 = no sign
@@ -392,6 +393,7 @@ class CarState(CarStateBase):
         ("wheelspeed1", 50),
         ("BrakeReqAck", 50),
         ("Accessories_01", 20),
+        ("BrakeHold", 50),
       ]
       cam_messages = [
         ("FSM0", 100),

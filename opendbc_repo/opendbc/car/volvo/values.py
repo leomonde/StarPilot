@@ -117,6 +117,11 @@ class CarControllerParams:
   EUCD_STANDSTILL_DELAY = 3.0  # s stopped before FSM3 ACC_Standstill
   EUCD_HOLD_ACCEL = -0.08  # m/s^2, FSM3 accel while the car holds (raw 0x7C)
   EUCD_GO_RETRY_TIME = 2.0  # s still stopped after the resume burst -> standstill again, retry
+  # The camera stays cancelled after the stop (FSM0 82/0x10); resume on its bus re-engages it
+  EUCD_CAM_RESYNC_SPEED = 32. * CV.KPH_TO_MS  # resume to the camera above this (its ACC minimum is 30)
+  EUCD_CAM_RESYNC_PERIOD = int(1.0 / DT_CTRL)  # frames between resume bursts
+  EUCD_CAM_RESYNC_TIMEOUT = 8.0  # s; then the camera's frames back to the ECM (ACC drops, as before)
+  EUCD_CAM_CLEAN_FRAMES = int(0.3 / DT_CTRL)  # camera clean this long -> its frames back to the ECM
 
   # Longitudinal limits
   EUCD_ACCEL_MIN = -4.0  # m/s^2
