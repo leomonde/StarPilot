@@ -100,6 +100,24 @@ class CarControllerParams:
   EUCD_BUTTON_BURST = 15  # frames per button press
   EUCD_SNG_OP_RESUME_TIME = 0.5  # s of openpilot resume before SNG
 
+  # Simulated red light (test): wipers on = red, off = green
+  EUCD_SIM_RED_LIGHT = True
+  EUCD_SIM_RED_LIGHT_ON_FRAMES = int(0.3 / DT_CTRL)  # wipers on this long -> red
+  EUCD_SIM_RED_LIGHT_OFF_FRAMES = int(1.5 / DT_CTRL)  # wipers off this long -> green
+
+  # OP stop to 0 without a camera target (red light), replaying the camera's own stop (route 807).
+  # The camera cancels slow with no target (FSM3 NoTargetCancel, then FSM0 abort 0x10): OP masks it
+  # and sends FSM0/FSM3/FSM4 from the camera's last clean frames until it drives off.
+  EUCD_NO_TARGET_STOP = True
+  EUCD_NO_TARGET_STOP_SIM_ONLY = True  # only on the simulated red light (wipers)
+  EUCD_NO_TARGET_STOP_ENTER_SPEED = 20. * CV.KPH_TO_MS  # starts below this, no target
+  EUCD_NO_TARGET_STOP_EXIT_SPEED = 30. * CV.KPH_TO_MS  # camera frames back above this
+  EUCD_STOPPING_FLAG_SPEED = 2.6 * CV.KPH_TO_MS  # FSM4 b1 F1 -> F9 below this
+  EUCD_HOLD_RELEASE_FRAMES = int(0.05 / DT_CTRL)  # brake request released after the car's hold
+  EUCD_STANDSTILL_DELAY = 3.0  # s stopped before FSM3 ACC_Standstill
+  EUCD_HOLD_ACCEL = -0.08  # m/s^2, FSM3 accel while the car holds (raw 0x7C)
+  EUCD_GO_RETRY_TIME = 2.0  # s still stopped after the resume burst -> standstill again, retry
+
   # Longitudinal limits
   EUCD_ACCEL_MIN = -4.0  # m/s^2
   EUCD_ACCEL_MAX = 2.0   # m/s^2

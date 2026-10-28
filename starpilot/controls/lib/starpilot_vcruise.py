@@ -54,6 +54,7 @@ NAV_TURN_TARGET_SPEEDS = {
 # Smaller values pull speed down earlier on approach.
 FORCE_STOP_MODEL_APPROACH_DECEL = 0.65
 FORCE_STOP_DASH_APPROACH_DECEL = 1.0
+SIM_RED_LIGHT_DECEL = 1.0  # m/s^2 — simulated red light (starpilotCarState.simRedLight) line placed at this decel
 ACTIVATION_M = 100.0      # m — CEM/model path activates when model_length < this. Buys
                           # ~1.8 s more runway inside the position constraint, which is the
                           # only part of the approach that tracks without lag. A false arm
@@ -201,6 +202,8 @@ class StarPilotVCruise:
     # starpilotPlan.forcingStopLength, so the existing reader keeps working.
     self.tracked_model_length = 0.0
     self.force_stop_distance_cap = 0.0  # odometry ceiling, re-seeded until commit
+    self.sim_red_light_prev = False
+    self.sim_red_light_distance = 0.0  # m to the simulated red light's line
 
     self.stop_sign_confirmed = False
     self.stop_seen_on_approach_at = None
@@ -658,10 +661,29 @@ class StarPilotVCruise:
     # cleared on every path; only the far-approach envelope below republishes it
     self.approach_stop_length = 0.0
 
+    # Simulated red light: a virtual line at SIM_RED_LIGHT_DECEL from where it turned red,
+    # held until green. No model, lead or curve gates: it's a test trigger.
+    sim_red_light = bool(getattr(sm["starpilotCarState"], "simRedLight", False)) and controls_enabled
+    if sim_red_light and not self.sim_red_light_prev:
+      self.sim_red_light_distance = v_ego ** 2 / (2.0 * SIM_RED_LIGHT_DECEL) + force_stop_handoff_m
+    self.sim_red_light_prev = sim_red_light
+
     if force_standstill_enabled and not self.override_force_standstill:
       self.forcing_stop = True
       self.tracked_model_length = 0.0
       v_cruise = 0.0
+
+    elif sim_red_light:
+      self.forcing_stop = True
+      self.sim_red_light_distance = max(self.sim_red_light_distance - v_ego * DT_MDL, 0.0)
+      if sm["carState"].standstill:
+        # Stopped short of the line: hold here
+        self.sim_red_light_distance = min(self.sim_red_light_distance, force_stop_handoff_m)
+      self.tracked_model_length = self.sim_red_light_distance
+      if self.sim_red_light_distance <= force_stop_handoff_m:
+        v_cruise = 0.0
+      else:
+        v_cruise = min(math.sqrt(2.0 * SIM_RED_LIGHT_DECEL * (self.sim_red_light_distance - force_stop_handoff_m)), v_cruise)
 
     elif force_stop_enabled and not self.override_force_stop:
       if self.force_stop_entry_speed is None and not sm["carState"].standstill:

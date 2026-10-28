@@ -1534,3 +1534,44 @@ def test_nav_turn_speed_control_does_not_floor_steer_to_zero_cars():
 
   assert result == pytest.approx(vcruise.nav_turn_target)
   assert vcruise.nav_turn_target == pytest.approx(5.0 * CV.MPH_TO_MS)
+
+
+def test_sim_red_light_stops_holds_and_releases_on_green():
+  _planner, vcruise = make_vcruise()
+  sm = make_sm(standstill=False)
+  toggles = make_toggles()
+  sm["starpilotCarState"].simRedLight = True
+
+  # Turns red at 15 m/s: the line sits where 1 m/s^2 stops us, so no step in the speed ceiling
+  v_ego, now = 15.0, 0.0
+  v_cruise = update_vcruise(vcruise, sm, toggles, now=now, v_ego=v_ego, v_cruise=20.0)
+  assert vcruise.forcing_stop
+  assert v_cruise == pytest.approx(v_ego, abs=0.1)
+
+  # Follow the ceiling down to a stop
+  while v_ego > 0.0:
+    now += DT_MDL
+    v_ego = max(min(v_ego, v_cruise) - 1.0 * DT_MDL, 0.0)
+    v_cruise = update_vcruise(vcruise, sm, toggles, now=now, v_ego=v_ego, v_cruise=20.0)
+    assert vcruise.forcing_stop
+
+  # Held at standstill while red, even stopped a bit short of the line
+  sm["carState"].standstill = True
+  for _ in range(100):
+    now += DT_MDL
+    assert update_vcruise(vcruise, sm, toggles, now=now, v_ego=0.0, v_cruise=20.0) == 0.0
+    assert vcruise.forcing_stop
+
+  # Green: released
+  sm["starpilotCarState"].simRedLight = False
+  now += DT_MDL
+  assert update_vcruise(vcruise, sm, toggles, now=now, v_ego=0.0, v_cruise=20.0) == pytest.approx(20.0)
+  assert not vcruise.forcing_stop
+
+
+def test_sim_red_light_needs_controls_enabled():
+  _planner, vcruise = make_vcruise()
+  sm = make_sm(standstill=False)
+  sm["starpilotCarState"].simRedLight = True
+  update_vcruise(vcruise, sm, make_toggles(), now=0.0, v_ego=15.0, controls_enabled=False)
+  assert not vcruise.forcing_stop

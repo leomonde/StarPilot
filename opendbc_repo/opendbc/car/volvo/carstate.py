@@ -61,6 +61,11 @@ class CarState(CarStateBase):
     self._eucd_pending_delta = 0
     self._eucd_custom_acc_step = 1
     self.eucd_gap_button_states = {"TimeGapIncreaseBtn": False, "TimeGapDecreaseBtn": False}
+    self.eucd_sim_red_light = False
+    self.eucd_wipers_frames = 0  # frames the wipers differ from the red light state
+    # Set by the carcontroller: OP's no-target stop owns the ACC standstill
+    self.eucd_no_target_stop = False
+    self.eucd_op_standstill = False
 
   def update(self, can_parsers, starpilot_toggles) -> structs.CarState:
     if self.is_c1:
@@ -252,8 +257,13 @@ class CarState(CarStateBase):
     # ECM is the ACC master
     self.eucd_ecm_acc_engaged = int(pt_cp.vl["EngineData"]["ACC_State_ECM"]) == EcmAccState.ENGAGED
     ret.cruiseState.enabled = self.eucd_ecm_acc_engaged
-    # Camera standstill hold, gated by the car's standstill
-    ret.cruiseState.standstill = bool(cam_cp.vl["FSM3"]["ACC_Standstill"]) and ret.standstill
+    # Camera standstill hold, gated by the car's standstill; OP's own in a no-target stop
+    if self.eucd_no_target_stop:
+      ret.cruiseState.standstill = self.eucd_op_standstill and ret.standstill
+    else:
+      ret.cruiseState.standstill = bool(cam_cp.vl["FSM3"]["ACC_Standstill"]) and ret.standstill
+    # The car holds the stop (BrakeReqAck b0 bit7, route 807)
+    self.eucd_car_hold = bool(int(pt_cp.vl["BrakeReqAck"]["Byte_0"]) & 0x80)
     ret.cruiseState.nonAdaptive = False
     ret.accFaulted = False
     self.eucd_acc_distance = cam_cp.vl["FSM1"]["ACC_Distance"]
@@ -330,7 +340,19 @@ class CarState(CarStateBase):
     # TSR speed limit, 0 = no sign
     tsr_kph = cam_cp.vl["FSM5"]["TSR_Speed"]
     fp_ret.dashboardSpeedLimit = tsr_kph * CV.KPH_TO_MS if tsr_kph > 0 else 0.0
+    fp_ret.simRedLight = self._eucd_update_sim_red_light(pt_cp.vl["Accessories_01"]["Wipers"] != 0)
     return ret, fp_ret
+
+  def _eucd_update_sim_red_light(self, wipers_on):
+    """Simulated red light from the wipers, debounced: on = red, off = green."""
+    CCP = CarControllerParams
+    if not CCP.EUCD_SIM_RED_LIGHT:
+      return False
+    self.eucd_wipers_frames = self.eucd_wipers_frames + 1 if wipers_on != self.eucd_sim_red_light else 0
+    if self.eucd_wipers_frames >= (CCP.EUCD_SIM_RED_LIGHT_OFF_FRAMES if self.eucd_sim_red_light else CCP.EUCD_SIM_RED_LIGHT_ON_FRAMES):
+      self.eucd_sim_red_light = wipers_on
+      self.eucd_wipers_frames = 0
+    return self.eucd_sim_red_light
 
   @staticmethod
   def get_can_parsers(CP):
@@ -369,6 +391,7 @@ class CarState(CarStateBase):
         ("BrakeStatus", 25),
         ("wheelspeed1", 50),
         ("BrakeReqAck", 50),
+        ("Accessories_01", 20),
       ]
       cam_messages = [
         ("FSM0", 100),

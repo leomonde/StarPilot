@@ -486,13 +486,16 @@ def _eucd_copy(stock, skip=()):
   return {k: v for k, v in stock.items() if k not in skip}
 
 
-def create_eucd_longitudinal(packer, stock_fsm3, accel, acc_check, mode: LongMode | None = None):
-  # Camera FSM3 with OP's accel, ACC_Check, mode and traction
+def create_eucd_longitudinal(packer, stock_fsm3, accel, acc_check, mode: LongMode | None = None, standstill: bool | None = None):
+  # Camera FSM3 with OP's accel, ACC_Check, mode and traction; standstill set = OP's no-target stop
   values = _eucd_copy(stock_fsm3)
   values |= {
     "ACC_AccelerationRequest": accel,
     "ACC_Check": acc_check,
   }
+  if standstill is not None:
+    values["ACC_Standstill"] = int(standstill)
+    values["ACC_NoTargetCancel"] = 0
   if mode is not None:
     values["ACC_Mode"] = int(mode)
     values["ACC_TractionRequest"] = eucd_fsm3_traction(accel, mode)
@@ -548,23 +551,27 @@ def create_eucd_cam_brake_level(packer, stock_brake_level, frozen_level: int | N
   return packer.make_can_msg("BrakeLevel", CANBUS.cam, values)
 
 
-def create_eucd_cam_wheel_status(packer, stock_wheelspeed1, mask: bool, spoof: bool = False):
-  # wheelspeed1 to the camera; brake request bit masked or spoofed
+def create_eucd_cam_wheel_status(packer, stock_wheelspeed1, mask: bool, spoof: bool = False, hide_hold: bool = False):
+  # wheelspeed1 to the camera; brake request bit masked or spoofed, standstill hold (b0 bit6) hidden
   values = _eucd_copy(stock_wheelspeed1, skip=("WhlSpdRR", "WhlSpdLR"))
   if mask:
     values["BrakeReqActive"] = 0
   elif spoof:
     values["BrakeReqActive"] = 1
+  if hide_hold:
+    values["Byte_0"] = int(values["Byte_0"]) & ~0x40
   return packer.make_can_msg("wheelspeed1", CANBUS.cam, values)
 
 
-def create_eucd_cam_brake_request_ack(packer, stock_brake_req_ack, mask: bool, spoof: bool = False):
-  # BrakeReqAck to the camera; brake ack (active low) masked or spoofed
+def create_eucd_cam_brake_request_ack(packer, stock_brake_req_ack, mask: bool, spoof: bool = False, hide_hold: bool = False):
+  # BrakeReqAck to the camera; brake ack (active low) masked or spoofed, standstill hold (b0 bit7) hidden
   values = _eucd_copy(stock_brake_req_ack)
   if mask:
     values["BrakeReqNotAck"] = 1
   elif spoof:
     values["BrakeReqNotAck"] = 0
+  if hide_hold:
+    values["Byte_0"] = int(values["Byte_0"]) & ~0x80
   return packer.make_can_msg("BrakeReqAck", CANBUS.cam, values)
 
 
