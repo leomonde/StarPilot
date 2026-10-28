@@ -135,7 +135,7 @@ class CarControllerParams:
   EUCD_OP_BRAKE_OVERRIDE_MARGIN = 1.0  # OP brakes if this far below the camera
 
   # FSM3 mirrors camera mode 0; camera hydraulic brake followed below this
-  EUCD_CAMERA_BRAKE_HONOR_BELOW = -3.0  # m/s^2
+  EUCD_CAMERA_BRAKE_HONOR_BELOW = -3.5  # m/s^2
   # With a close camera target, OP accel capped at the camera's, not below the floor
   EUCD_CAMERA_ACCEL_CAP_FLOOR = 0.0  # m/s^2
   EUCD_CAMERA_ACCEL_CAP_GAP = 1.5  # s, camera target closer than this

@@ -35,7 +35,7 @@ def test_mild_camera_brake_ignored():
 
 def test_op_braking_more_is_never_limited():
   cc = controller(cam_brake=True)
-  assert cc._eucd_camera_brake(-3.5, HARD) == -3.5
+  assert cc._eucd_camera_brake(HARD - 0.5, HARD) == HARD - 0.5
 
 
 def fsm3(mode):
