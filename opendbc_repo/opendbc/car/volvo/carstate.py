@@ -62,7 +62,8 @@ class CarState(CarStateBase):
     self._eucd_custom_acc_step = 1
     self.eucd_gap_button_states = {"TimeGapIncreaseBtn": False, "TimeGapDecreaseBtn": False}
     self.eucd_sim_red_light = False
-    self.eucd_wipers_frames = 0  # frames the wipers differ from the red light state
+    self.eucd_start_stop_on: bool | None = None  # debounced start/stop state
+    self.eucd_start_stop_frames = 0  # frames the start/stop differs from it
     # Set by the carcontroller: OP's no-target stop owns the ACC standstill
     self.eucd_no_target_stop = False
     self.eucd_op_standstill = False
@@ -341,18 +342,24 @@ class CarState(CarStateBase):
     # TSR speed limit, 0 = no sign
     tsr_kph = cam_cp.vl["FSM5"]["TSR_Speed"]
     fp_ret.dashboardSpeedLimit = tsr_kph * CV.KPH_TO_MS if tsr_kph > 0 else 0.0
-    fp_ret.simRedLight = self._eucd_update_sim_red_light(pt_cp.vl["Accessories_01"]["Wipers"] != 0)
+    start_stop = pt_cp.vl["StartStop"]["StartStop"], pt_cp.vl["Accessories_02"]["StartStop_Inv"]
+    fp_ret.simRedLight = self._eucd_update_sim_red_light(start_stop == (1, 0), start_stop == (0, 1))
     return ret, fp_ret
 
-  def _eucd_update_sim_red_light(self, wipers_on):
-    """Simulated red light from the wipers, debounced: on = red, off = green."""
+  def _eucd_update_sim_red_light(self, start_stop_on, start_stop_off):
+    """Simulated red light from the start/stop button, on its edges: turned off = red, back on = green."""
     CCP = CarControllerParams
     if not CCP.EUCD_SIM_RED_LIGHT:
       return False
-    self.eucd_wipers_frames = self.eucd_wipers_frames + 1 if wipers_on != self.eucd_sim_red_light else 0
-    if self.eucd_wipers_frames >= (CCP.EUCD_SIM_RED_LIGHT_OFF_FRAMES if self.eucd_sim_red_light else CCP.EUCD_SIM_RED_LIGHT_ON_FRAMES):
-      self.eucd_sim_red_light = wipers_on
-      self.eucd_wipers_frames = 0
+    # Both copies must agree (0x322 and the inverted 0x180)
+    if start_stop_on or start_stop_off:
+      if self.eucd_start_stop_on is None:
+        self.eucd_start_stop_on = start_stop_on  # state at start-up is not an edge
+      self.eucd_start_stop_frames = self.eucd_start_stop_frames + 1 if start_stop_on != self.eucd_start_stop_on else 0
+      if self.eucd_start_stop_frames >= CCP.EUCD_SIM_RED_LIGHT_DEBOUNCE_FRAMES:
+        self.eucd_start_stop_on = start_stop_on
+        self.eucd_start_stop_frames = 0
+        self.eucd_sim_red_light = not start_stop_on
     return self.eucd_sim_red_light
 
   @staticmethod
@@ -392,7 +399,8 @@ class CarState(CarStateBase):
         ("BrakeStatus", 25),
         ("wheelspeed1", 50),
         ("BrakeReqAck", 50),
-        ("Accessories_01", 20),
+        ("StartStop", 33),
+        ("Accessories_02", 50),
         ("BrakeHold", 50),
       ]
       cam_messages = [
