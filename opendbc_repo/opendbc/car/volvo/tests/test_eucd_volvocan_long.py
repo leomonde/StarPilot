@@ -210,7 +210,9 @@ STOCK_BRAKE_REQ_ACK = ["40054c020dff2235", "4005480201f72239"]
 def test_wheelspeed1_relay_to_camera(stock, mask):
   addr, dat, bus = volvocan.create_eucd_cam_wheel_status(CANPacker(DBC), parse("wheelspeed1", WHEELSPEED1_ADDR, 50, stock), mask)
   assert (addr, bus) == (WHEELSPEED1_ADDR, 2)
-  assert dat[2] == (stock[2] & ~0x04 if mask else stock[2])  # 0xE4 -> 0xE0, 0xE5 -> 0xE1
+  # brake request (bit2) masked; ACC brake applied (bit0) too with correction E: 0xE4 -> 0xE0, 0xE5 -> 0xE0 (0xE1 without E)
+  masked_bits = 0x05 if CarControllerParams.EUCD_CAM_HIDES_ACC_BRAKE_APPLIED else 0x04
+  assert dat[2] == (stock[2] & ~masked_bits if mask else stock[2])
   assert dat[:2] == stock[:2] and dat[3:] == stock[3:]
 
 

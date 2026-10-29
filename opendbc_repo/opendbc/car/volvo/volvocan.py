@@ -552,10 +552,14 @@ def create_eucd_cam_brake_level(packer, stock_brake_level, frozen_level: int | N
 
 
 def create_eucd_cam_wheel_status(packer, stock_wheelspeed1, mask: bool, spoof: bool = False, hide_hold: bool = False):
-  # wheelspeed1 to the camera; brake request bit masked or spoofed, standstill hold (b0 bit6) hidden
+  # wheelspeed1 to the camera; brake request bit (+ ACC brake applied) masked or spoofed, standstill hold (b0 bit6) hidden
   values = _eucd_copy(stock_wheelspeed1, skip=("WhlSpdRR", "WhlSpdLR"))
   if mask:
     values["BrakeReqActive"] = 0
+    if CarControllerParams.EUCD_CAM_HIDES_ACC_BRAKE_APPLIED:
+      # follows the brake request and holds at standstill (route 807); the camera latched FC ~1.5 s after it showed
+      # up in its standby view (routes 886/888/88b), never set in the standby after a driver cancel (route 885)
+      values["ACC_BrakeApplied"] = 0
   elif spoof:
     values["BrakeReqActive"] = 1
   if hide_hold:
@@ -598,7 +602,8 @@ def create_eucd_cam_acc_hold(packer, stock_acc_hold, show_standby: bool):
   values = _eucd_copy(stock_acc_hold)
   if show_standby:
     values["Byte_0"] = int(values["Byte_0"]) & ~0x43
-    values["Byte_1"] = int(values["Byte_1"]) & ~0x01
+    if CarControllerParams.EUCD_CAM_STANDBY_HIDES_ACC_HOLD_B1:
+      values["Byte_1"] = int(values["Byte_1"]) & ~0x01
   return packer.make_can_msg("AccHold", CANBUS.cam, values)
 
 
@@ -606,7 +611,7 @@ def create_eucd_cam_brake_info(packer, stock_brake_info, show_driver_brake: bool
   # Brake_Info to the camera; show_driver_brake: the ACC brake shown as the driver's pedal, as the camera sees the car
   # brake in standby after a driver cancel (route 885), not by an ACC command it never sent (route 886)
   values = _eucd_copy(stock_brake_info)
-  if show_driver_brake and int(values["BrakeCmd"]):
+  if show_driver_brake and CarControllerParams.EUCD_CAM_STANDBY_BRAKE_AS_PEDAL and int(values["BrakeCmd"]):
     values |= {"BrakeCmd": 0, "BrakePedal": 2, "BrakePedal2": 1}
   values["CHECKSUM"] = 15 - int(values["COUNTER"])  # routes 885/886
   return packer.make_can_msg("Brake_Info", CANBUS.cam, values)
@@ -616,7 +621,7 @@ def create_eucd_cam_acc_speed(packer, stock_acc_speed, show_standby: bool):
   # ACC_Speed to the camera; show_standby: no ECM engaged nor drive-off from standstill, as in the standby after a
   # driver cancel (route 885); the camera latched FC with them on in standby (routes 886/888)
   values = _eucd_copy(stock_acc_speed)
-  if show_standby:
+  if show_standby and CarControllerParams.EUCD_CAM_STANDBY_HIDES_ECM_ENGAGED:
     values |= {"ACC_Engaged_ECM": 0, "ACC_DriveOff": 0}
   return packer.make_can_msg("ACC_Speed", CANBUS.cam, values)
 

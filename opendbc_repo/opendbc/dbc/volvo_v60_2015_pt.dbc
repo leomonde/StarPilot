@@ -184,7 +184,8 @@ BO_ 544 wheelspeed1: 8 BCM
  SG_ Byte_1 : 15|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_2_b7_3 : 23|5@0+ (1,0) [0|31] "" XXX
  SG_ BrakeReqActive : 18|1@0+ (1,0) [0|1] "" XXX
- SG_ Byte_2_b1_0 : 17|2@0+ (1,0) [0|3] "" XXX
+ SG_ Byte_2_b1 : 17|1@0+ (1,0) [0|1] "" XXX
+ SG_ ACC_BrakeApplied : 16|1@0+ (1,0) [0|1] "" XXX
  SG_ Byte_3 : 31|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_4 : 39|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_5 : 47|8@0+ (1,0) [0|255] "" XXX
