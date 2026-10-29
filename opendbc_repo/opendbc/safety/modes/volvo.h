@@ -21,7 +21,7 @@
 #define VOLVO_EUCD_FSM0          0x051U  // TX by OP, camera's relayed; ACC state
 #define VOLVO_EUCD_EngineData    0x12AU  // RX, ECM ACC state
 #define VOLVO_EUCD_VehicleSpeed1 0x148U  // RX, vehicle speed
-#define VOLVO_EUCD_Brake_Info    0x20aU  // RX, driver brake pressed
+#define VOLVO_EUCD_Brake_Info    0x20aU  // RX, driver brake pressed; TX by OP to camera
 #define VOLVO_EUCD_CCButtons     0x127U  // TX by OP, CC buttons
 #define VOLVO_EUCD_PSCM1         0x246U  // TX by OP to camera, PSCM state
 #define VOLVO_EUCD_BRAKE_LEVEL   0x133U  // TX by OP to camera, brake level
@@ -184,6 +184,7 @@ static safety_config volvo_eucd_init(void) {
     {VOLVO_EUCD_BRAKE_HOLD,    VOLVO_PARTY_BUS, 8, .check_relay = true},
     {VOLVO_EUCD_ACC_HOLD,      VOLVO_PARTY_BUS, 8, .check_relay = true},
     {VOLVO_EUCD_EngineData,    VOLVO_PARTY_BUS, 8, .check_relay = true},  // camera sees ACC standby in OP's no-target stop
+    {VOLVO_EUCD_Brake_Info,    VOLVO_PARTY_BUS, 8, .check_relay = true},  // camera sees OP's ACC brake as the driver's pedal then
     {VOLVO_EUCD_FSM2,      VOLVO_MAIN_BUS, 8, .check_relay = true},   // OP replaces stock LKA command
     // FSM1/FSM3: camera's pass through while OP does not control (relay delay faults the ECM)
     {VOLVO_EUCD_FSM1,      VOLVO_MAIN_BUS, 8, .check_relay = false},

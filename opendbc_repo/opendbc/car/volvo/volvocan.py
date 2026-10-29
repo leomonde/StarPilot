@@ -593,11 +593,23 @@ def create_eucd_cam_engine_data(packer, stock_engine_data, show_standby: bool):
 
 
 def create_eucd_cam_acc_hold(packer, stock_acc_hold, show_standby: bool):
-  # 0x325 to the camera; show_standby: no ACC engaged (C4) nor ACC standstill hold (87), as standby (84)
+  # 0x325 to the camera; show_standby: no ACC engaged (C4) nor ACC standstill hold (87), as standby (84).
+  # b1 bit0 comes only with C4 (AB, route 885), so it goes too (AA)
   values = _eucd_copy(stock_acc_hold)
   if show_standby:
     values["Byte_0"] = int(values["Byte_0"]) & ~0x43
+    values["Byte_1"] = int(values["Byte_1"]) & ~0x01
   return packer.make_can_msg("AccHold", CANBUS.cam, values)
+
+
+def create_eucd_cam_brake_info(packer, stock_brake_info, show_driver_brake: bool):
+  # Brake_Info to the camera; show_driver_brake: the ACC brake shown as the driver's pedal, as the camera sees the car
+  # brake in standby after a driver cancel (route 885), not by an ACC command it never sent (route 886)
+  values = _eucd_copy(stock_brake_info)
+  if show_driver_brake and int(values["BrakeCmd"]):
+    values |= {"BrakeCmd": 0, "BrakePedal": 2, "BrakePedal2": 1}
+  values["CHECKSUM"] = 15 - int(values["COUNTER"])  # routes 885/886
+  return packer.make_can_msg("Brake_Info", CANBUS.cam, values)
 
 
 def create_eucd_cam_brake_hold(packer, stock_brake_hold, frozen_b0: int | None):
