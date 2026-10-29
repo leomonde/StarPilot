@@ -15,7 +15,7 @@ from opendbc.car.volvo.volvocan import (create_c1_cancel, create_c1_pscm_message
                                         create_eucd_fsm0, create_eucd_fsm4, create_eucd_radar, create_eucd_cam_brake_level,
                                         create_eucd_cam_brake_status, create_eucd_cam_wheel_status, create_eucd_cam_brake_request_ack,
                                         create_eucd_cam_brake_hold, create_eucd_cam_brake_info, create_eucd_cam_button, create_eucd_cam_engine_data,
-                                        create_eucd_cam_acc_hold,
+                                        create_eucd_cam_acc_hold, create_eucd_cam_acc_speed,
                                         eucd_fsm4_brake_value, eucd_next_long_mode)
 from opendbc.car.volvo.values import CAR, CarControllerParams, LongMode, SteerDirection, VolvoC1PlatformConfig, VolvoEUCDPlatformConfig
 
@@ -744,13 +744,15 @@ class CarController(CarControllerBase):
       sends.append(create_eucd_cam_wheel_status(self.packer, stock_wheelspeed1, mask_wheelspeed1, spoof_wheelspeed1, hide_hold=mask))
     for stock_brake_req_ack in CS.eucd_stock_BrakeReqAck_frames:
       sends.append(create_eucd_cam_brake_request_ack(self.packer, stock_brake_req_ack, mask_brake_req_ack, spoof_brake_req_ack, hide_hold=mask))
-    # EngineData, 0x325 and Brake_Info always relayed (the panda blocks them); ACC standby while the camera is shown it
+    # EngineData, 0x325, Brake_Info and ACC_Speed always relayed (the panda blocks them); ACC standby while the camera is shown it
     for stock_engine_data in CS.eucd_stock_EngineData_frames:
       sends.append(create_eucd_cam_engine_data(self.packer, stock_engine_data, self.eucd_nt_cam_standby))
     for stock_acc_hold in CS.eucd_stock_AccHold_frames:
       sends.append(create_eucd_cam_acc_hold(self.packer, stock_acc_hold, self.eucd_nt_cam_standby))
     for stock_brake_info in CS.eucd_stock_Brake_Info_frames:
       sends.append(create_eucd_cam_brake_info(self.packer, stock_brake_info, self.eucd_nt_cam_standby))
+    for stock_acc_speed in CS.eucd_stock_ACC_Speed_frames:
+      sends.append(create_eucd_cam_acc_speed(self.packer, stock_acc_speed, self.eucd_nt_cam_standby))
     # CCButtons always relayed (the panda blocks them), with Set held while re-engaging the camera
     set_plus = self.eucd_cam_set_frames > 0
     self.eucd_cam_set_frames = max(self.eucd_cam_set_frames - 1, 0)

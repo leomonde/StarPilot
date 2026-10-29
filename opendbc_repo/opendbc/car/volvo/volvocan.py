@@ -612,6 +612,15 @@ def create_eucd_cam_brake_info(packer, stock_brake_info, show_driver_brake: bool
   return packer.make_can_msg("Brake_Info", CANBUS.cam, values)
 
 
+def create_eucd_cam_acc_speed(packer, stock_acc_speed, show_standby: bool):
+  # ACC_Speed to the camera; show_standby: no ECM engaged nor drive-off from standstill, as in the standby after a
+  # driver cancel (route 885); the camera latched FC with them on in standby (routes 886/888)
+  values = _eucd_copy(stock_acc_speed)
+  if show_standby:
+    values |= {"ACC_Engaged_ECM": 0, "ACC_DriveOff": 0}
+  return packer.make_can_msg("ACC_Speed", CANBUS.cam, values)
+
+
 def create_eucd_cam_brake_hold(packer, stock_brake_hold, frozen_b0: int | None):
   # 0x1FF to the camera; b0 held during OP's no-target stop (its 0x70 -> 0xD0 fires the camera's brake alert)
   values = _eucd_copy(stock_brake_hold)
