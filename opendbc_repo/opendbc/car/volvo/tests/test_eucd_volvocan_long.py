@@ -213,7 +213,7 @@ def test_wheelspeed1_relay_to_camera(stock, mask, show_standby):
                                                          show_standby=show_standby)
   assert (addr, bus) == (WHEELSPEED1_ADDR, 2)
   # brake request (bit2) masked: 0xE4 -> 0xE0, 0xE5 -> 0xE1; ACC brake applied (bit0) hidden only in the standby view (E)
-  masked_bits = (0x04 if mask else 0) | (0x01 if show_standby and CarControllerParams.EUCD_CAM_HIDES_ACC_BRAKE_APPLIED else 0)
+  masked_bits = (0x04 if mask else 0) | (0x01 if show_standby else 0)
   assert dat[2] == stock[2] & ~masked_bits
   assert dat[:2] == stock[:2] and dat[3:] == stock[3:]
 

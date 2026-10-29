@@ -130,15 +130,6 @@ BO_ 359 ACC_Speed: 8 XXX
  SG_ ACC_Speed : 0|8@0+ (1,0) [0|255] "km/h" XXX
  SG_ GasPedal : 51|12@0- (1,0) [0|255] "" XXX
  SG_ GasPressed : 52|1@0+ (1,0) [0|1] "" XXX
- SG_ ACC_Engaged_ECM : 53|1@0+ (1,0) [0|1] "" XXX
- SG_ ACC_DriveOff : 55|1@0+ (1,0) [0|1] "" XXX
- SG_ Byte_0_b7_1 : 7|7@0+ (1,0) [0|127] "" XXX
- SG_ Byte_1_b0 : 8|1@0+ (1,0) [0|1] "" XXX
- SG_ Byte_2 : 23|8@0+ (1,0) [0|255] "" XXX
- SG_ Byte_3 : 31|8@0+ (1,0) [0|255] "" XXX
- SG_ Byte_4 : 39|8@0+ (1,0) [0|255] "" XXX
- SG_ Byte_5 : 47|8@0+ (1,0) [0|255] "" XXX
- SG_ Byte_6_b6 : 54|1@0+ (1,0) [0|1] "" XXX
 
 BO_ 384 Accessories_02: 8 XXX
  SG_ Park_Assist_State : 42|1@0+ (1,0) [0|1] "" XXX
@@ -168,14 +159,6 @@ BO_ 522 Brake_Info: 8 XXX
  SG_ BrakePedal2 : 33|2@0+ (1,0) [0|3] "" XXX
  SG_ CHECKSUM : 39|4@0+ (1,0) [0|15] "" XXX
  SG_ NEW_SIGNAL_1 : 47|8@0+ (1,0) [0|255] "" XXX
- SG_ Byte_0_b7_2 : 7|6@0+ (1,0) [0|63] "" XXX
- SG_ Byte_0_b0 : 0|1@0+ (1,0) [0|1] "" XXX
- SG_ Byte_1_b7_6 : 15|2@0+ (1,0) [0|3] "" XXX
- SG_ Byte_1_b4 : 12|1@0+ (1,0) [0|1] "" XXX
- SG_ Byte_2_b7_4 : 23|4@0+ (1,0) [0|15] "" XXX
- SG_ Byte_4_b3_2 : 35|2@0+ (1,0) [0|3] "" XXX
- SG_ Byte_6 : 55|8@0+ (1,0) [0|255] "" XXX
- SG_ Byte_7 : 63|8@0+ (1,0) [0|255] "" XXX
 
 BO_ 544 wheelspeed1: 8 BCM
  SG_ WhlSpdRR : 39|16@0+ (0.01,-327.68) [0|65535] "" XXX
