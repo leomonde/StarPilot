@@ -741,7 +741,8 @@ class CarController(CarControllerBase):
     for stock_brake_status in CS.eucd_stock_BrakeStatus_frames:
       sends.append(create_eucd_cam_brake_status(self.packer, stock_brake_status, mask_brake_status))
     for stock_wheelspeed1 in CS.eucd_stock_wheelspeed1_frames:
-      sends.append(create_eucd_cam_wheel_status(self.packer, stock_wheelspeed1, mask_wheelspeed1, spoof_wheelspeed1, hide_hold=mask))
+      sends.append(create_eucd_cam_wheel_status(self.packer, stock_wheelspeed1, mask_wheelspeed1, spoof_wheelspeed1, hide_hold=mask,
+                                                 show_standby=self.eucd_nt_cam_standby))
     for stock_brake_req_ack in CS.eucd_stock_BrakeReqAck_frames:
       sends.append(create_eucd_cam_brake_request_ack(self.packer, stock_brake_req_ack, mask_brake_req_ack, spoof_brake_req_ack, hide_hold=mask))
     # EngineData, 0x325, Brake_Info and ACC_Speed always relayed (the panda blocks them); ACC standby while the camera is shown it

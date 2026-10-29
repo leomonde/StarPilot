@@ -551,17 +551,20 @@ def create_eucd_cam_brake_level(packer, stock_brake_level, frozen_level: int | N
   return packer.make_can_msg("BrakeLevel", CANBUS.cam, values)
 
 
-def create_eucd_cam_wheel_status(packer, stock_wheelspeed1, mask: bool, spoof: bool = False, hide_hold: bool = False):
-  # wheelspeed1 to the camera; brake request bit (+ ACC brake applied) masked or spoofed, standstill hold (b0 bit6) hidden
+def create_eucd_cam_wheel_status(packer, stock_wheelspeed1, mask: bool, spoof: bool = False, hide_hold: bool = False,
+                                 show_standby: bool = False):
+  # wheelspeed1 to the camera; brake request bit masked or spoofed, standstill hold (b0 bit6) hidden,
+  # ACC brake applied hidden in the standby view
   values = _eucd_copy(stock_wheelspeed1, skip=("WhlSpdRR", "WhlSpdLR"))
   if mask:
     values["BrakeReqActive"] = 0
-    if CarControllerParams.EUCD_CAM_HIDES_ACC_BRAKE_APPLIED:
-      # follows the brake request and holds at standstill (route 807); the camera latched FC ~1.5 s after it showed
-      # up in its standby view (routes 886/888/88b), never set in the standby after a driver cancel (route 885)
-      values["ACC_BrakeApplied"] = 0
   elif spoof:
     values["BrakeReqActive"] = 1
+  if show_standby and CarControllerParams.EUCD_CAM_HIDES_ACC_BRAKE_APPLIED:
+    # follows the ACC's brake mode and holds at standstill (route 807); the camera latched FC ~1.5 s after it showed
+    # up in its standby view (routes 886/888/88b), never set in the standby after a driver cancel (route 885).
+    # Engaged, it answers the camera's own brake mode: hidden then, the camera aborts 0x10 (route 892)
+    values["ACC_BrakeApplied"] = 0
   if hide_hold:
     values["Byte_0"] = int(values["Byte_0"]) & ~0x40
   return packer.make_can_msg("wheelspeed1", CANBUS.cam, values)

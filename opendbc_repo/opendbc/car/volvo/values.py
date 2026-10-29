@@ -126,9 +126,9 @@ class CarControllerParams:
   EUCD_CAM_RESYNC_ATTEMPTS = 3  # then the camera's frames back to the ECM (ACC drops)
   # Tries against the camera's FC ~1.5 s into OP's no-target stop (routes 886/888/88b); False = frame relayed unchanged,
   # to find which ones the camera really needs once it works (no panda rebuild)
-  EUCD_CAM_STANDBY_HIDES_ACC_HOLD_B1 = True  # B: 0x325 b1 bit0 off in the standby view
-  EUCD_CAM_STANDBY_BRAKE_AS_PEDAL = True  # C: Brake_Info's ACC brake shown as the driver's pedal in the standby view
-  EUCD_CAM_STANDBY_HIDES_ECM_ENGAGED = True  # D: ACC_Speed's ACC_Engaged_ECM/ACC_DriveOff off in the standby view
+  EUCD_CAM_STANDBY_HIDES_ACC_HOLD_B1 = False  # B: 0x325 b1 bit0 off in the standby view
+  EUCD_CAM_STANDBY_BRAKE_AS_PEDAL = False  # C: Brake_Info's ACC brake shown as the driver's pedal in the standby view
+  EUCD_CAM_STANDBY_HIDES_ECM_ENGAGED = False  # D: ACC_Speed's ACC_Engaged_ECM/ACC_DriveOff off in the standby view
   EUCD_CAM_HIDES_ACC_BRAKE_APPLIED = True  # E: wheelspeed1's ACC_BrakeApplied off while the brake request is masked
   EUCD_CAM_CLEAN_FRAMES = int(0.3 / DT_CTRL)  # camera engaged and clean this long -> its frames back to the ECM
 
