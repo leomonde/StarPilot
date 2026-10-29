@@ -749,9 +749,11 @@ class CarController(CarControllerBase):
       sends.append(create_eucd_cam_engine_data(self.packer, stock_engine_data, self.eucd_nt_cam_standby))
     for stock_acc_hold in CS.eucd_stock_AccHold_frames:
       sends.append(create_eucd_cam_acc_hold(self.packer, stock_acc_hold, self.eucd_nt_cam_standby))
-    if self.eucd_cam_set_frames > 0:
-      self.eucd_cam_set_frames -= 1
-      sends.append(create_eucd_cam_button(self.packer, CS.eucd_stock_CCButtons, set_plus=True))
+    # CCButtons always relayed (the panda blocks them), with Set held while re-engaging the camera
+    set_plus = self.eucd_cam_set_frames > 0
+    self.eucd_cam_set_frames = max(self.eucd_cam_set_frames - 1, 0)
+    for stock_ccbuttons in CS.eucd_stock_CCButtons_frames:
+      sends.append(create_eucd_cam_button(self.packer, stock_ccbuttons, set_plus))
     # 0x1FF b0 held from the stop on, while stopped in the no-target stop
     hold_mask = self.eucd_nt_active and CS.out.standstill
     for stock_brake_hold in CS.eucd_stock_BrakeHold_frames:

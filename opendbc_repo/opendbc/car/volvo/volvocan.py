@@ -576,7 +576,7 @@ def create_eucd_cam_brake_request_ack(packer, stock_brake_req_ack, mask: bool, s
 
 
 def create_eucd_cam_button(packer, stock_ccbuttons, set_plus: bool):
-  # CEM's CCButtons to the camera with Set pressed; the other bytes as the CEM's (the camera rejects zeroed ones)
+  # CEM's CCButtons to the camera, Set pressed if set_plus; the other bytes as the CEM's (the camera rejects zeroed ones)
   values = _eucd_copy(stock_ccbuttons)
   if set_plus:
     values |= {"ACCSetBtn": 1, "ACCSetBtnInv": 0}

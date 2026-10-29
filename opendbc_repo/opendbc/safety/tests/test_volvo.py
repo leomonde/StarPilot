@@ -533,8 +533,8 @@ class TestVolvoEUCD(common.CarSafetyTest, common.AngleSteeringSafetyTest):
              [0x127, VOLVO_PARTY_BUS], [0x325, VOLVO_PARTY_BUS], [0x12A, VOLVO_PARTY_BUS]]
   GAS_PRESSED_THRESHOLD = 10
   STANDSTILL_THRESHOLD = 0.1
-  RELAY_MALFUNCTION_ADDRS = {VOLVO_MAIN_BUS: [0x051, 0x262, 0x31A], VOLVO_PARTY_BUS: [0x246, 0x133, 0x323, 0x220, 0x299, 0x1FF, 0x325, 0x12A]}
-  FWD_BLACKLISTED_ADDRS = {VOLVO_PARTY_BUS: [0x051, 0x262, 0x31A], VOLVO_MAIN_BUS: [0x051, 0x246, 0x133, 0x323, 0x220, 0x299, 0x1FF, 0x325, 0x12A]}
+  RELAY_MALFUNCTION_ADDRS = {VOLVO_MAIN_BUS: [0x051, 0x262, 0x31A], VOLVO_PARTY_BUS: [0x246, 0x133, 0x323, 0x220, 0x299, 0x1FF, 0x325, 0x12A, 0x127]}
+  FWD_BLACKLISTED_ADDRS = {VOLVO_PARTY_BUS: [0x051, 0x262, 0x31A], VOLVO_MAIN_BUS: [0x051, 0x246, 0x133, 0x323, 0x220, 0x299, 0x1FF, 0x325, 0x12A, 0x127]}
 
   # Angle control limits
   STEER_ANGLE_MAX = 90  # deg, matches CarControllerParams.EUCD_ANGLE_LIMITS
@@ -587,14 +587,19 @@ class TestVolvoEUCD(common.CarSafetyTest, common.AngleSteeringSafetyTest):
       self._rx(self.packer.make_can_msg_safety("EngineData", VOLVO_MAIN_BUS, {"ACC_State_ECM": state}))
       self.assertEqual(engaged, self.safety.get_controls_allowed(), f"{state=}")
 
-  def test_resume_to_camera_needs_controls_allowed(self):
-    # OP presses resume on the camera bus to re-engage its ACC; same button rules as on the car bus
+  def test_button_rules_only_to_the_car(self):
+    # Resume/cancel to the car need controls allowed / cruise engaged. OP relays every CEM frame to the camera
+    # (driver's buttons included), which cannot engage the ECM, so the camera bus is not checked
     resume = {"ACCResumeBtn": 1, "ACCResumeBtnInv": 0, "ACCOnOffBtnInv": 1}
+    cancel = {"ACCOnOffBtn": 1, "ACCOnOffBtnInv": 0, "ACCResumeBtnInv": 1}
+    self._rx(self._pcm_status_msg(False))
     for bus in (VOLVO_MAIN_BUS, VOLVO_PARTY_BUS):
       for controls_allowed in (False, True):
         self.safety.set_controls_allowed(controls_allowed)
         msg = self.packer.make_can_msg_safety("CCButtons", bus, resume)
-        self.assertEqual(controls_allowed, self._tx(msg), f"{bus=} {controls_allowed=}")
+        self.assertEqual(controls_allowed or bus == VOLVO_PARTY_BUS, self._tx(msg), f"{bus=} {controls_allowed=}")
+      msg = self.packer.make_can_msg_safety("CCButtons", bus, cancel)
+      self.assertEqual(bus == VOLVO_PARTY_BUS, self._tx(msg), f"{bus=}")
 
   def test_camera_fsm0_does_not_engage(self):
     # the camera's FSM0 is not an engagement source anymore

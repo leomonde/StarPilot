@@ -120,7 +120,7 @@ class CarControllerParams:
   # aborts nor alerts. It follows the ECM's ACC state (route 881), so it re-engages like on the driver's Set:
   # Set on its bus, then EngineData engaged again 30 ms later
   EUCD_CAM_RESYNC_SPEED = 32. * CV.KPH_TO_MS  # re-engage above this (its ACC minimum is 30)
-  EUCD_CAM_SET_FRAMES = int(0.07 / DT_CTRL)  # Set press to the camera, like the driver's
+  EUCD_CAM_SET_FRAMES = int(0.16 / DT_CTRL)  # Set press to the camera, as long as the driver's (route 885)
   EUCD_CAM_SPOOF_RELEASE_FRAMES = int(0.03 / DT_CTRL)  # EngineData engaged again this long after the Set
   EUCD_CAM_RESYNC_RETRY = 2.0  # s without the camera back -> standby again for 1 s, Set again
   EUCD_CAM_RESYNC_ATTEMPTS = 3  # then the camera's frames back to the ECM (ACC drops)

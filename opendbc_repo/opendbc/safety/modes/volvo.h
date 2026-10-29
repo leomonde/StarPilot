@@ -105,8 +105,9 @@ static bool volvo_eucd_tx_hook(const CANPacket_t *msg) {
   bool violation = false;
   int addr = msg->addr;
 
-  // Safety check for CC button signals.
-  if (addr == VOLVO_EUCD_CCButtons) {
+  // Safety check for CC button signals to the car. The camera bus gets every CEM frame relayed by OP (driver's
+  // buttons included), which cannot engage the ECM.
+  if ((addr == VOLVO_EUCD_CCButtons) && (msg->bus == VOLVO_MAIN_BUS)) {
     // Violation if resume button is pressed while controls not allowed, or
     // if cancel button is pressed when cruise isn't engaged.
     violation |= !cruise_engaged_prev && (GET_BIT(msg, 59U) || !(GET_BIT(msg, 43U)));  // Signals: ACCOnOffBtn, ACCOnOffBtnInv (cancel)
@@ -172,7 +173,8 @@ static bool volvo_eucd_fwd_hook(int bus_num, int addr) {
 static safety_config volvo_eucd_init(void) {
   static const CanMsg VOLVO_EUCD_TX_MSGS[] = {
     {VOLVO_EUCD_CCButtons, VOLVO_MAIN_BUS,  8, .check_relay = false},
-    {VOLVO_EUCD_CCButtons, VOLVO_PARTY_BUS, 8, .check_relay = false},  // Set to the camera, re-engages its ACC
+    // relayed by OP with Set to re-engage the camera's ACC; check_relay so the CEM's frame does not pass along with it
+    {VOLVO_EUCD_CCButtons, VOLVO_PARTY_BUS, 8, .check_relay = true},
     {VOLVO_EUCD_PSCM1,     VOLVO_PARTY_BUS, 8, .check_relay = true},   // OP replaces stock steering servo state
     // car -> camera, relayed by OP
     {VOLVO_EUCD_BRAKE_LEVEL,   VOLVO_PARTY_BUS, 8, .check_relay = true},
