@@ -407,7 +407,10 @@ class CarController(CarControllerBase):
         self.eucd_distance = CS.eucd_acc_distance
         self.eucd_waiting = True
         self.eucd_sng_count = 0
-      if at_standstill and self.eucd_waiting and (CS.eucd_acc_distance > self.eucd_distance or op_resume):
+      # In the no-target stop only OP's resume (green) drives off: the camera's distance has no lead to follow
+      # and its jitter drove off while OP still asked to stop (route 884, 30.9 s)
+      lead_moved = CS.eucd_acc_distance > self.eucd_distance and not self.eucd_nt_active
+      if at_standstill and self.eucd_waiting and (lead_moved or op_resume):
         can_sends.extend(self._eucd_resume_burst())
         if self.eucd_sng_count == 0:
           self.eucd_sng_ack_frames = 25
