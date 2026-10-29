@@ -72,7 +72,9 @@ class CarController(CarControllerBase):
     self.eucd_nt_standstill = False
     self.eucd_nt_stopping = False
     self.eucd_nt_holding = False
+    self.eucd_nt_driver_gas = False  # driver on the gas: OP's long off, the stop kept as a drive-off (routes 896/897)
     self.eucd_nt_cam_standby = False  # camera shown ACC standby (EngineData, 0x325)
+    self.eucd_nt_exit_standby_frames = 0  # stop ended (driver's brake, cancel) with the ECM still engaged: still standby
     self.eucd_nt_resync_frames = 0  # frames re-engaging the camera after the drive-off
     self.eucd_nt_resync_attempts = 0
     self.eucd_nt_clean_frames = 0
@@ -410,7 +412,7 @@ class CarController(CarControllerBase):
       # In the no-target stop only OP's resume (green) drives off: the camera's distance has no lead to follow
       # and its jitter drove off while OP still asked to stop (route 884, 30.9 s)
       lead_moved = CS.eucd_acc_distance > self.eucd_distance and not self.eucd_nt_active
-      if at_standstill and self.eucd_waiting and (lead_moved or op_resume):
+      if at_standstill and self.eucd_waiting and (lead_moved or op_resume or self.eucd_nt_driver_gas):
         can_sends.extend(self._eucd_resume_burst())
         if self.eucd_sng_count == 0:
           self.eucd_sng_ack_frames = 25
@@ -447,8 +449,8 @@ class CarController(CarControllerBase):
         # b1 F9: stopping
         byte_1 = int(stock_fsm4["Byte_1"])
         stock_fsm4["Byte_1"] = (byte_1 | 0x08) if self.eucd_nt_stopping else (byte_1 & ~0x08)
-        if self.eucd_nt_holding:
-          # The car holds: brake request released, like the camera 50 ms after the hold
+        if self.eucd_nt_holding or self.eucd_nt_driver_gas:
+          # The car holds (or the driver's gas): brake request released, like the camera 50 ms after the hold
           stock_fsm4 |= {"Byte_5_b7": 1, "ACC_BrakeRequest": 0, "ACC_BrakeTarget": eucd_fsm4_brake_value(0., False) & 0x3FFF}
           mode = None
       sends.append(create_eucd_fsm4(self.packer, stock_fsm4, self.eucd_accel, mode, cam_weight=self.eucd_cam_weight))
@@ -482,12 +484,22 @@ class CarController(CarControllerBase):
     v = CS.out.vEgo
     allowed = CCP.EUCD_NO_TARGET_STOP and (CS.eucd_sim_red_light or not CCP.EUCD_NO_TARGET_STOP_SIM_ONLY)
     have_templates = self.eucd_tpl_fsm0 and len(self.eucd_tpl_fsm3) == 2 and self.eucd_tpl_fsm4 is not None
-    if not CC.longActive or (v > CCP.EUCD_NO_TARGET_STOP_EXIT_SPEED and not self.eucd_nt_cam_aborted):
+    # The driver's gas turns OP's long off but not the stop: ending it there gave the ECM the camera's frames
+    # (not engaged) and the camera the ECM's (engaged), and the camera aborted for good (routes 896/897)
+    self.eucd_nt_driver_gas = self.eucd_nt_active and CC.enabled and CS.out.gasPressed and not CC.longActive
+    # Ended with the ECM still engaged (OP drops on the driver's brake first): the camera keeps seeing standby until the
+    # ECM is out of it, never the ECM engaged from standby, which aborted it 0x10 for good (route 896)
+    if self.eucd_nt_exit_standby_frames > 0:
+      done = not CS.eucd_ecm_acc_engaged or self.eucd_nt_exit_standby_frames * DT_CTRL >= CCP.EUCD_NT_EXIT_STANDBY_MAX
+      self.eucd_nt_exit_standby_frames = 0 if (done or self.eucd_nt_active) else self.eucd_nt_exit_standby_frames + 1
+    if not (CC.longActive or self.eucd_nt_driver_gas) or (v > CCP.EUCD_NO_TARGET_STOP_EXIT_SPEED and not self.eucd_nt_cam_aborted):
+      if self.eucd_nt_cam_standby and CS.eucd_ecm_acc_engaged:
+        self.eucd_nt_exit_standby_frames = 1
       self._eucd_reset_no_target_stop()
     elif self.eucd_nt_cam_aborted and (self.eucd_nt_going or not allowed) and v > CCP.EUCD_CAM_RESYNC_SPEED:
       # Driven off after the stop, or green before stopping
       self._eucd_resync_camera(cancelled)
-    elif (not self.eucd_nt_active and allowed and have_templates and not cancelled and
+    elif (not self.eucd_nt_active and CC.longActive and allowed and have_templates and not cancelled and
           CS.eucd_acc_distance >= 255 and v < CCP.EUCD_NO_TARGET_STOP_ENTER_SPEED):
       # From now on the ECM gets the camera's last clean frames from OP, and the camera sees ACC standby
       self.eucd_nt_active = self.eucd_nt_cam_aborted = self.eucd_nt_cam_standby = True
@@ -496,6 +508,8 @@ class CarController(CarControllerBase):
       self.eucd_nt_cam_aborted |= cancelled
       self.eucd_nt_still_frames = self.eucd_nt_still_frames + 1 if CS.out.standstill else 0
 
+      # The driver's gas drives off as OP's resume does
+      self.eucd_nt_go_request |= self.eucd_nt_driver_gas and not self.eucd_nt_going
       if self.eucd_nt_go_request:
         self.eucd_nt_going, self.eucd_nt_go_frames, self.eucd_nt_go_moved = True, 0, False
       if self.eucd_nt_going:
@@ -518,8 +532,9 @@ class CarController(CarControllerBase):
       self.eucd_nt_hold_frames = self.eucd_nt_hold_frames + 1 if (stopping and CS.out.standstill and CS.eucd_car_hold) else 0
       self.eucd_nt_stopping = stopping
       # Held until OP asks to drive after the resume, so no brake pulse at the start
-      self.eucd_nt_holding = (self.eucd_nt_hold_frames > CCP.EUCD_HOLD_RELEASE_FRAMES or
-                              (self.eucd_nt_holding and self.eucd_nt_going and CS.out.standstill and CC.actuators.accel <= 0.))
+      self.eucd_nt_holding = not self.eucd_nt_driver_gas and (
+        self.eucd_nt_hold_frames > CCP.EUCD_HOLD_RELEASE_FRAMES or
+        (self.eucd_nt_holding and self.eucd_nt_going and CS.out.standstill and CC.actuators.accel <= 0.))
       self.eucd_nt_standstill = stopping and self.eucd_nt_still_frames * DT_CTRL >= CCP.EUCD_STANDSTILL_DELAY
     self.eucd_nt_go_request = False
 
@@ -550,7 +565,7 @@ class CarController(CarControllerBase):
 
   def _eucd_reset_no_target_stop(self):
     self.eucd_nt_active = self.eucd_nt_cam_aborted = self.eucd_nt_going = False
-    self.eucd_nt_standstill = self.eucd_nt_stopping = self.eucd_nt_holding = False
+    self.eucd_nt_standstill = self.eucd_nt_stopping = self.eucd_nt_holding = self.eucd_nt_driver_gas = False
     self.eucd_nt_still_frames = self.eucd_nt_hold_frames = 0
     self.eucd_nt_cam_standby = False
     self.eucd_nt_resync_frames = self.eucd_nt_resync_attempts = self.eucd_nt_clean_frames = 0
@@ -576,6 +591,9 @@ class CarController(CarControllerBase):
       self.eucd_cam_relay = False
       self.eucd_cam_weight = 0.
       long_mode = None
+      if self.eucd_nt_driver_gas:
+        # The ECM drives on the driver's gas: no brake nor traction from OP (the template's mode is stale)
+        accel, long_mode = 0., LongMode.COAST
     if self.eucd_nt_holding:
       # The car holds the stop: the camera's standstill request (route 807)
       accel = CarControllerParams.EUCD_HOLD_ACCEL
@@ -718,7 +736,7 @@ class CarController(CarControllerBase):
     CCP = CarControllerParams
     if self.eucd_cam_brake and not self.eucd_nt_active:
       self.eucd_cam_mask_frames = 0
-    elif CC.longActive and ((self.eucd_long_mode == LongMode.BRAKE and not self.eucd_cam_relay) or self.eucd_nt_active):
+    elif (CC.longActive and self.eucd_long_mode == LongMode.BRAKE and not self.eucd_cam_relay) or self.eucd_nt_active:
       # No-target stop: the camera never asked, so it never sees the car brake or hold
       self.eucd_cam_mask_frames = CCP.EUCD_CAM_BRAKE_MASK_HOLD_FRAMES
     elif self.eucd_cam_mask_frames > 0:
@@ -733,6 +751,8 @@ class CarController(CarControllerBase):
       self.eucd_cam_brake_target = int(last_fsm4["ACC_BrakeTarget"])
     spoof_brake_req_ack = spoof_brake_req_ack and self.eucd_cam_brake_target < CCP.EUCD_CAM_ACK_RELEASE_VALUE
 
+    cam_standby = self.eucd_nt_cam_standby or self.eucd_nt_exit_standby_frames > 0
+
     sends = []
     for stock_brake_level in CS.eucd_stock_BrakeLevel_frames:
       if not mask_brake_level:
@@ -742,18 +762,18 @@ class CarController(CarControllerBase):
       sends.append(create_eucd_cam_brake_status(self.packer, stock_brake_status, mask_brake_status))
     for stock_wheelspeed1 in CS.eucd_stock_wheelspeed1_frames:
       sends.append(create_eucd_cam_wheel_status(self.packer, stock_wheelspeed1, mask_wheelspeed1, spoof_wheelspeed1, hide_hold=mask,
-                                                 show_standby=self.eucd_nt_cam_standby))
+                                                 show_standby=cam_standby))
     for stock_brake_req_ack in CS.eucd_stock_BrakeReqAck_frames:
       sends.append(create_eucd_cam_brake_request_ack(self.packer, stock_brake_req_ack, mask_brake_req_ack, spoof_brake_req_ack, hide_hold=mask))
     # EngineData, 0x325, Brake_Info and ACC_Speed always relayed (the panda blocks them); ACC standby while the camera is shown it
     for stock_engine_data in CS.eucd_stock_EngineData_frames:
-      sends.append(create_eucd_cam_engine_data(self.packer, stock_engine_data, self.eucd_nt_cam_standby))
+      sends.append(create_eucd_cam_engine_data(self.packer, stock_engine_data, cam_standby))
     for stock_acc_hold in CS.eucd_stock_AccHold_frames:
-      sends.append(create_eucd_cam_acc_hold(self.packer, stock_acc_hold, self.eucd_nt_cam_standby))
+      sends.append(create_eucd_cam_acc_hold(self.packer, stock_acc_hold, cam_standby))
     for stock_brake_info in CS.eucd_stock_Brake_Info_frames:
-      sends.append(create_eucd_cam_brake_info(self.packer, stock_brake_info, self.eucd_nt_cam_standby))
+      sends.append(create_eucd_cam_brake_info(self.packer, stock_brake_info, cam_standby))
     for stock_acc_speed in CS.eucd_stock_ACC_Speed_frames:
-      sends.append(create_eucd_cam_acc_speed(self.packer, stock_acc_speed, self.eucd_nt_cam_standby))
+      sends.append(create_eucd_cam_acc_speed(self.packer, stock_acc_speed, cam_standby))
     # CCButtons always relayed (the panda blocks them), with Set held while re-engaging the camera
     set_plus = self.eucd_cam_set_frames > 0
     self.eucd_cam_set_frames = max(self.eucd_cam_set_frames - 1, 0)

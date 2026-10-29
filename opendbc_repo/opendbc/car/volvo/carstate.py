@@ -348,11 +348,14 @@ class CarState(CarStateBase):
     tsr_kph = cam_cp.vl["FSM5"]["TSR_Speed"]
     fp_ret.dashboardSpeedLimit = tsr_kph * CV.KPH_TO_MS if tsr_kph > 0 else 0.0
     start_stop = pt_cp.vl["StartStop"]["StartStop"], pt_cp.vl["Accessories_02"]["StartStop_Inv"]
-    fp_ret.simRedLight = self._eucd_update_sim_red_light(start_stop == (1, 0), start_stop == (0, 1))
+    resume_pressed = bool(pt_cp.vl["CCButtons"]["ACCResumeBtn"]) and not pt_cp.vl["CCButtons"]["ACCResumeBtnInv"]
+    fp_ret.simRedLight = self._eucd_update_sim_red_light(start_stop == (1, 0), start_stop == (0, 1),
+                                                         resume_pressed or ret.gasPressed)
     return ret, fp_ret
 
-  def _eucd_update_sim_red_light(self, start_stop_on, start_stop_off):
-    """Simulated red light from the start/stop button, on its edges: turned off = red, back on = green."""
+  def _eucd_update_sim_red_light(self, start_stop_on, start_stop_off, driver_go):
+    """Simulated red light from the start/stop button, on its edges: turned off = red, back on = green.
+    The driver's Resume or gas is green too: at a stop the driver decides when to go (route 897)."""
     CCP = CarControllerParams
     if not CCP.EUCD_SIM_RED_LIGHT:
       return False
@@ -365,6 +368,8 @@ class CarState(CarStateBase):
         self.eucd_start_stop_on = start_stop_on
         self.eucd_start_stop_frames = 0
         self.eucd_sim_red_light = not start_stop_on
+    if driver_go:
+      self.eucd_sim_red_light = False
     return self.eucd_sim_red_light
 
   @staticmethod
