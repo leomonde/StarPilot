@@ -64,9 +64,9 @@ class CarState(CarStateBase):
     self.eucd_sim_red_light = False
     self.eucd_start_stop_on: bool | None = None  # debounced start/stop state
     self.eucd_start_stop_frames = 0  # frames the start/stop differs from it
-    # Set by the carcontroller: OP's no-target stop owns the ACC standstill
-    self.eucd_no_target_stop = False
-    self.eucd_op_standstill = False
+    # Set by the carcontroller: OP's stop to 0 owns the ACC standstill
+    self.eucd_full_stop_active = False
+    self.eucd_full_stop_standstill = False
 
   def update(self, can_parsers, starpilot_toggles) -> structs.CarState:
     if self.is_c1:
@@ -258,9 +258,9 @@ class CarState(CarStateBase):
     # ECM is the ACC master
     self.eucd_ecm_acc_engaged = int(pt_cp.vl["EngineData"]["ACC_State_ECM"]) == EcmAccState.ENGAGED
     ret.cruiseState.enabled = self.eucd_ecm_acc_engaged
-    # Camera standstill hold, gated by the car's standstill; OP's own in a no-target stop
-    if self.eucd_no_target_stop:
-      ret.cruiseState.standstill = self.eucd_op_standstill and ret.standstill
+    # Camera standstill hold, gated by the car's standstill; OP's own in its stop to 0
+    if self.eucd_full_stop_active:
+      ret.cruiseState.standstill = self.eucd_full_stop_standstill and ret.standstill
     else:
       ret.cruiseState.standstill = bool(cam_cp.vl["FSM3"]["ACC_Standstill"]) and ret.standstill
     # The car holds the stop (BrakeReqAck b0 bit7, route 807)

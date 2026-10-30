@@ -108,9 +108,8 @@ class CarControllerParams:
   # red light, stop sign, obstacle) and the port follows accel, stopping and cruiseControl.resume: below the enter
   # speed, braking, OP owns the ECM with the camera's last clean FSM0/FSM3/FSM4 and the camera is shown ACC standby.
   # The camera cancels slow with no target (FSM3 NoTargetCancel, then FSM0 abort 0x10, routes 827/895): never engaged then
-  EUCD_NO_TARGET_STOP = True
-  EUCD_NO_TARGET_STOP_ENTER_SPEED = 30. * CV.KPH_TO_MS  # OP takes the ECM below this while braking (the camera's ACC minimum)
-  EUCD_NO_TARGET_STOP_EXIT_SPEED = 30. * CV.KPH_TO_MS  # camera frames back above this
+  EUCD_FULL_STOP = True
+  EUCD_FULL_STOP_ENTER_SPEED = 30. * CV.KPH_TO_MS  # OP takes the ECM below this while braking (the camera's ACC minimum)
   EUCD_STOPPING_FLAG_SPEED = 2.6 * CV.KPH_TO_MS  # FSM4 b1 F1 -> F9 below this
   EUCD_HOLD_RELEASE_FRAMES = int(0.05 / DT_CTRL)  # brake request released after the car's hold
   EUCD_STANDSTILL_DELAY = 3.0  # s stopped before FSM3 ACC_Standstill
@@ -124,7 +123,7 @@ class CarControllerParams:
   EUCD_CAM_SPOOF_RELEASE_FRAMES = int(0.03 / DT_CTRL)  # EngineData engaged again this long after the Set
   EUCD_CAM_RESYNC_RETRY = 2.0  # s without the camera back -> standby again for 1 s, Set again
   EUCD_CAM_RESYNC_ATTEMPTS = 3  # then the camera's frames back to the ECM (ACC drops)
-  EUCD_NT_EXIT_STANDBY_MAX = 1.0  # s, stop ended with the ECM still engaged: camera kept in standby at most this long
+  EUCD_FULL_STOP_EXIT_STANDBY_MAX = 1.0  # s, stop ended with the ECM still engaged: camera kept in standby at most this long
   EUCD_CAM_CLEAN_FRAMES = int(0.3 / DT_CTRL)  # camera engaged and clean this long -> its frames back to the ECM
 
   # Longitudinal limits
@@ -152,14 +151,6 @@ class CarControllerParams:
   EUCD_CAM_BRAKE_MASK_HOLD_FRAMES = int(1.0 / DT_CTRL)
 
   EUCD_CAM_ACK_RELEASE_VALUE = 13280  # spoofed BrakeReqAck released at this FSM4 target
-
-  # Camera final stop behind a lead: off, OP's stop takes the ECM first (below EUCD_NO_TARGET_STOP_ENTER_SPEED)
-  EUCD_CAMERA_STOPS_BEHIND_LEAD = False
-  EUCD_CAM_STOP_HANDOVER_SPEED = 20. * CV.KPH_TO_MS  # camera stops below this, with a target
-  EUCD_CAM_STOP_RETURN_SPEED = 30. * CV.KPH_TO_MS  # OP takes back above this
-  EUCD_CAM_STOP_TRANSITION_TIME = 1.0  # s, OP/camera blend
-  EUCD_OP_BRAKE_OVERRIDE_ACCEL = -0.3  # OP brakes below this if the camera doesn't
-  EUCD_OP_BRAKE_OVERRIDE_MARGIN = 1.0  # OP brakes if this far below the camera
 
   # FSM3 mirrors camera mode 0; camera hydraulic brake followed below this
   EUCD_CAMERA_BRAKE_HONOR_BELOW = -3.5  # m/s^2

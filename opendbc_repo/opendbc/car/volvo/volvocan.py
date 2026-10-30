@@ -487,7 +487,7 @@ def _eucd_copy(stock, skip=()):
 
 
 def create_eucd_longitudinal(packer, stock_fsm3, accel, acc_check, mode: LongMode | None = None, standstill: bool | None = None):
-  # Camera FSM3 with OP's accel, ACC_Check, mode and traction; standstill set = OP's no-target stop
+  # Camera FSM3 with OP's accel, ACC_Check, mode and traction; standstill set = OP's stop to 0
   values = _eucd_copy(stock_fsm3)
   values |= {
     "ACC_AccelerationRequest": accel,
@@ -509,18 +509,13 @@ def eucd_fsm4_brake_value(accel: float, brake: bool) -> int:
   return 0x8000 | (0x4000 if brake else 0) | int(round(float(np.interp(accel, bp, v))))
 
 
-def create_eucd_fsm4(packer, stock_fsm4, accel: float, mode: LongMode | None = None, cam_weight: float = 0.):
+def create_eucd_fsm4(packer, stock_fsm4, accel: float, mode: LongMode | None = None):
   # Camera FSM4; brake flag and target follow OP's accel when either side brakes
   values = _eucd_copy(stock_fsm4)
   op_brake = mode == LongMode.BRAKE
   cam_brake = bool(stock_fsm4["ACC_BrakeRequest"])
   if mode is not None and (op_brake or cam_brake):
     value = eucd_fsm4_brake_value(accel, op_brake)
-    if cam_weight > 0. and op_brake and cam_brake:
-      # Blend into the camera's target during its stop
-      cam_value = int(stock_fsm4["ACC_BrakeTarget"])
-      blended = int(round((value & 0x3FFF) + cam_weight * (cam_value - (value & 0x3FFF))))
-      value = (value & 0xC000) | blended
     values["Byte_5_b7"] = (value >> 15) & 1
     values["ACC_BrakeRequest"] = (value >> 14) & 1
     values["ACC_BrakeTarget"] = value & 0x3FFF
@@ -608,7 +603,7 @@ def create_eucd_cam_acc_hold(packer, stock_acc_hold, show_standby: bool):
 
 
 def create_eucd_cam_brake_hold(packer, stock_brake_hold, frozen_b0: int | None):
-  # 0x1FF to the camera; b0 held during OP's no-target stop (its 0x70 -> 0xD0 fires the camera's brake alert)
+  # 0x1FF to the camera; b0 held during OP's stop to 0 (its 0x70 -> 0xD0 fires the camera's brake alert)
   values = _eucd_copy(stock_brake_hold)
   if frozen_b0 is not None:
     values["Byte_0"] = frozen_b0
