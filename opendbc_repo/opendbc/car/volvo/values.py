@@ -104,12 +104,12 @@ class CarControllerParams:
   EUCD_SIM_RED_LIGHT = True
   EUCD_SIM_RED_LIGHT_DEBOUNCE_FRAMES = int(0.2 / DT_CTRL)  # start/stop state held this long
 
-  # OP stop to 0 without a camera target (red light), replaying the camera's own stop (route 807).
-  # The camera cancels slow with no target (FSM3 NoTargetCancel, then FSM0 abort 0x10): OP masks it
-  # and sends FSM0/FSM3/FSM4 from the camera's last clean frames until it drives off.
+  # OP's stop to 0, replaying the camera's own stop (route 807). As the Ford/Toyota ports, the planner decides (lead,
+  # red light, stop sign, obstacle) and the port follows accel, stopping and cruiseControl.resume: below the enter
+  # speed, braking, OP owns the ECM with the camera's last clean FSM0/FSM3/FSM4 and the camera is shown ACC standby.
+  # The camera cancels slow with no target (FSM3 NoTargetCancel, then FSM0 abort 0x10, routes 827/895): never engaged then
   EUCD_NO_TARGET_STOP = True
-  EUCD_NO_TARGET_STOP_SIM_ONLY = True  # only on the simulated red light (start/stop)
-  EUCD_NO_TARGET_STOP_ENTER_SPEED = 60. * CV.KPH_TO_MS  # starts below this, no target
+  EUCD_NO_TARGET_STOP_ENTER_SPEED = 30. * CV.KPH_TO_MS  # OP takes the ECM below this while braking (the camera's ACC minimum)
   EUCD_NO_TARGET_STOP_EXIT_SPEED = 30. * CV.KPH_TO_MS  # camera frames back above this
   EUCD_STOPPING_FLAG_SPEED = 2.6 * CV.KPH_TO_MS  # FSM4 b1 F1 -> F9 below this
   EUCD_HOLD_RELEASE_FRAMES = int(0.05 / DT_CTRL)  # brake request released after the car's hold
@@ -153,8 +153,8 @@ class CarControllerParams:
 
   EUCD_CAM_ACK_RELEASE_VALUE = 13280  # spoofed BrakeReqAck released at this FSM4 target
 
-  # Camera final stop behind a lead
-  EUCD_CAMERA_STOPS_BEHIND_LEAD = True
+  # Camera final stop behind a lead: off, OP's stop takes the ECM first (below EUCD_NO_TARGET_STOP_ENTER_SPEED)
+  EUCD_CAMERA_STOPS_BEHIND_LEAD = False
   EUCD_CAM_STOP_HANDOVER_SPEED = 20. * CV.KPH_TO_MS  # camera stops below this, with a target
   EUCD_CAM_STOP_RETURN_SPEED = 30. * CV.KPH_TO_MS  # OP takes back above this
   EUCD_CAM_STOP_TRANSITION_TIME = 1.0  # s, OP/camera blend

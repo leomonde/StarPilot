@@ -408,8 +408,8 @@ class CarController(CarControllerBase):
         self.eucd_distance = CS.eucd_acc_distance
         self.eucd_waiting = True
         self.eucd_sng_count = 0
-      # In the no-target stop only OP's resume (green) drives off: the camera's distance has no lead to follow
-      # and its jitter drove off while OP still asked to stop (route 884, 30.9 s)
+      # In OP's stop only the planner's resume drives off (cruiseControl.resume, as Ford/Toyota): the camera's distance
+      # jitter drove off while OP still asked to stop (route 884, 30.9 s)
       lead_moved = CS.eucd_acc_distance > self.eucd_distance and not self.eucd_nt_active
       if at_standstill and self.eucd_waiting and (lead_moved or op_resume):
         can_sends.extend(self._eucd_resume_burst())
@@ -481,7 +481,6 @@ class CarController(CarControllerBase):
         self.eucd_tpl_fsm4 = CS.eucd_stock_FSM4_frames[-1]
 
     v = CS.out.vEgo
-    allowed = CCP.EUCD_NO_TARGET_STOP and (CS.eucd_sim_red_light or not CCP.EUCD_NO_TARGET_STOP_SIM_ONLY)
     have_templates = self.eucd_tpl_fsm0 and len(self.eucd_tpl_fsm3) == 2 and self.eucd_tpl_fsm4 is not None
     # Ended by the driver (brake, gas, cancel) with the ECM still engaged: the ECM gets the camera's frames (standby)
     # and drops, the camera keeps seeing standby until then, never the ECM engaged from standby, which aborted it 0x10
@@ -494,11 +493,12 @@ class CarController(CarControllerBase):
       if self.eucd_nt_cam_standby and CS.eucd_ecm_acc_engaged:
         self.eucd_nt_exit_standby_frames = 1
       self._eucd_reset_no_target_stop()
-    elif self.eucd_nt_cam_aborted and (self.eucd_nt_going or not allowed) and v > CCP.EUCD_CAM_RESYNC_SPEED:
-      # Driven off after the stop, or green before stopping
+    elif self.eucd_nt_cam_aborted and v > CCP.EUCD_CAM_RESYNC_SPEED:
+      # Driven off after the stop, or the planner did not stop after all
       self._eucd_resync_camera(cancelled)
-    elif (not self.eucd_nt_active and allowed and have_templates and not cancelled and
-          CS.eucd_acc_distance >= 255 and v < CCP.EUCD_NO_TARGET_STOP_ENTER_SPEED):
+    elif (not self.eucd_nt_active and CCP.EUCD_NO_TARGET_STOP and have_templates and not cancelled and
+          v < CCP.EUCD_NO_TARGET_STOP_ENTER_SPEED and CC.actuators.accel < 0.):
+      # OP braking slow, lead or not
       # From now on the ECM gets the camera's last clean frames from OP, and the camera sees ACC standby
       self.eucd_nt_active = self.eucd_nt_cam_aborted = self.eucd_nt_cam_standby = True
 
