@@ -98,7 +98,8 @@ class CarControllerParams:
   EUCD_BLOCK_LEN = 8   # frames to block steering on a direction change
   EUCD_DEADZONE = 0.2  # deg, keep the previous direction inside it
   EUCD_BUTTON_BURST = 15  # frames per button press
-  EUCD_SNG_OP_RESUME_TIME = 0.5  # s of openpilot resume before SNG
+  EUCD_SNG_OP_RESUME_TIME = 0.2  # s of openpilot resume before SNG (0.5 delayed the drive-off, route 89d)
+  EUCD_MIN_STEER_SPEED = 0.1  # m/s, no steering nor cancel button below this
 
   # Simulated red light (test): start/stop turned off = red, back on = green (edges only, route 87f)
   EUCD_SIM_RED_LIGHT = True
@@ -229,7 +230,7 @@ class VolvoEUCDPlatformConfig(PlatformConfig):
 class VolvoEUCDCarSpecs(CarSpecs):
   steerRatio: float = 15.0
   centerToFrontRatio: float = 0.44
-  minSteerSpeed: float = 0.1
+  minSteerSpeed: float = 0.  # the port's own limit is EUCD_MIN_STEER_SPEED; above 0 StarPilot alerts at every first stop
 
 
 class CAR(Platforms):

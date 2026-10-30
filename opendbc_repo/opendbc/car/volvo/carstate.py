@@ -274,7 +274,7 @@ class CarState(CarStateBase):
     self.eucd_acc_distance = cam_cp.vl["FSM1"]["ACC_Distance"]
 
     # Servo timeout while ACC is active
-    if ret.cruiseState.enabled and ret.vEgo > self.CP.minSteerSpeed:
+    if ret.cruiseState.enabled and ret.vEgo > CarControllerParams.EUCD_MIN_STEER_SPEED:
       if not self.eucd_cruise_enabled_prev:
         self.eucd_eps_torque_timer = 0
 

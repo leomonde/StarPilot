@@ -295,7 +295,7 @@ class CarController(CarControllerBase):
     actuators = CC.actuators
     can_sends = []
 
-    if CC.cruiseControl.cancel and CS.out.vEgo > self.CP.minSteerSpeed and not CS.out.brakePressed:
+    if CC.cruiseControl.cancel and CS.out.vEgo > CarControllerParams.EUCD_MIN_STEER_SPEED and not CS.out.brakePressed:
       can_sends.append(create_eucd_button_msg(self.packer, cancel=True))
 
     if self.frame % 2 == 0:
@@ -330,7 +330,7 @@ class CarController(CarControllerBase):
     """FSM2 steering request and PSCM1 servo state to the camera, 50 Hz."""
     CCP = CarControllerParams
     actuators = CC.actuators
-    if CC.latActive and CS.out.vEgo > self.CP.minSteerSpeed:
+    if CC.latActive and CS.out.vEgo > CCP.EUCD_MIN_STEER_SPEED:
       apply_steer = apply_std_steer_angle_limits(
         actuators.steeringAngleDeg, self.eucd_apply_steer_prev, CS.out.vEgoRaw,
         CS.out.steeringAngleDeg, CC.latActive, CCP.EUCD_ANGLE_LIMITS
