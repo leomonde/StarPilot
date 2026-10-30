@@ -128,7 +128,7 @@ class CarControllerParams:
   EUCD_CAM_CLEAN_FRAMES = int(0.3 / DT_CTRL)  # camera engaged and clean this long -> its frames back to the ECM
 
   # Longitudinal limits
-  EUCD_ACCEL_MIN = -4.0  # m/s^2
+  EUCD_ACCEL_MIN = -3.5  # m/s^2, as the panda's (the camera's harder brake goes out as its own frame)
   EUCD_ACCEL_MAX = 2.0   # m/s^2
 
   # FSM3 mode hysteresis on OP accel

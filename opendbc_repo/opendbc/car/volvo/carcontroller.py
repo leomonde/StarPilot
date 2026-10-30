@@ -49,6 +49,7 @@ class CarController(CarControllerBase):
     self.eucd_accel = 0.0
     self.eucd_cam_brake = False
     self.eucd_cam_brake_honor = False
+    self.eucd_cam_hard_brake = False  # the camera brakes harder than OP's limit: its FSM3/FSM4 go out unchanged
     self.eucd_spoof_cam_ack = False
     self.eucd_cam_brake_target = 0
     self.eucd_cam_mask_frames = 0
@@ -408,7 +409,7 @@ class CarController(CarControllerBase):
   def _eucd_relay_fsm4(self, CC, CS):
     """FSM4 relayed; OP sets brake flag and target."""
     sends = []
-    fsm4_mode = self.eucd_long_mode if CC.longActive else None
+    fsm4_mode = self.eucd_long_mode if (CC.longActive and not self.eucd_cam_hard_brake) else None
     for stock_fsm4 in CS.eucd_stock_FSM4_frames:
       self.eucd_cam_brake = bool(stock_fsm4["ACC_BrakeRequest"])
       mode = fsm4_mode
@@ -434,11 +435,17 @@ class CarController(CarControllerBase):
       accel = CarControllerParams.EUCD_HOLD_ACCEL
       long_mode = self.eucd_long_mode = LongMode.BRAKE
     self.eucd_accel = accel
+    # The panda only lets the camera's own frames past OP's limit, so they go out unchanged
+    cam_accel = float(CS.eucd_stock_FSM3["ACC_AccelerationRequest"])
+    self.eucd_cam_hard_brake = (CC.longActive and self.eucd_cam_brake_honor and not self.eucd_full_stop.active and
+                                cam_accel < CarControllerParams.EUCD_ACCEL_MIN)
 
     self.eucd_spoof_cam_ack = (CC.longActive and self.eucd_cam_brake and not self.eucd_cam_brake_honor and
                                self.eucd_long_mode != LongMode.BRAKE and not self.eucd_full_stop.active)
 
     stock_fsm3 = self.eucd_full_stop.fsm3(CS)
+    # OP's own frames within the panda's limit, also when following the camera's brake (route 895, 384.3 s)
+    accel = max(accel, CarControllerParams.EUCD_ACCEL_MIN)
     if self.eucd_sng_ack_frames > 0:
       acc_check = 1
       self.eucd_sng_ack_frames -= 1
@@ -450,6 +457,11 @@ class CarController(CarControllerBase):
       return [
         create_eucd_radar(self.packer, CS.eucd_stock_FSM1, long_mode),
         create_eucd_longitudinal(self.packer, stock_fsm3, accel, acc_check, long_mode, standstill=self.eucd_full_stop.standstill),
+      ]
+    if self.eucd_cam_hard_brake:
+      return [
+        create_eucd_radar(self.packer, CS.eucd_stock_FSM1),
+        create_eucd_longitudinal(self.packer, stock_fsm3, cam_accel, int(stock_fsm3["ACC_Check"])),
       ]
     return [
       create_eucd_radar(self.packer, CS.eucd_stock_FSM1),

@@ -639,9 +639,47 @@ class TestVolvoEUCD(common.CarSafetyTest, common.AngleSteeringSafetyTest):
     self.safety.set_controls_allowed(True)
     self.assertTrue(self._tx(self._longitudinal_cmd_msg(0.0)))   # neutral — must pass
     self.assertTrue(self._tx(self._longitudinal_cmd_msg(2.0)))   # max accel — must pass
-    self.assertTrue(self._tx(self._longitudinal_cmd_msg(-4.0)))  # max decel — must pass
+    self.assertTrue(self._tx(self._longitudinal_cmd_msg(-3.5)))  # max decel — must pass
     self.assertFalse(self._tx(self._longitudinal_cmd_msg(2.1)))  # above max accel — must block
-    self.assertFalse(self._tx(self._longitudinal_cmd_msg(-4.1))) # below min accel — must block
+    self.assertFalse(self._tx(self._longitudinal_cmd_msg(-3.6))) # below min accel — must block
+
+  def _cam_frame(self, name, values, bus):
+    return self.packer.make_can_msg_safety(name, bus, values)
+
+  def test_camera_hard_brake_frame_passes_unchanged(self):
+    # Below the limit only the camera's own FSM3, just received and unchanged, and only while OP's long is allowed
+    hard = {"ACC_AccelerationRequest": -4.5, "ACC_Check": 0, "FrameKind": 0x81}
+    self.safety.set_timer(100000)
+    self.safety.set_controls_allowed(True)
+    self.assertFalse(self._tx(self._cam_frame("FSM3", hard, VOLVO_MAIN_BUS)))  # not received from the camera
+    self._rx(self._cam_frame("FSM3", hard, VOLVO_PARTY_BUS))
+    self.assertTrue(self._tx(self._cam_frame("FSM3", hard, VOLVO_MAIN_BUS)))
+    self.assertFalse(self._tx(self._cam_frame("FSM3", hard | {"ACC_Check": 1}, VOLVO_MAIN_BUS)))  # changed
+    self.safety.set_timer(100000 + 200000)
+    self.assertFalse(self._tx(self._cam_frame("FSM3", hard, VOLVO_MAIN_BUS)))  # too old
+    self._rx(self._cam_frame("FSM3", hard, VOLVO_PARTY_BUS))
+    self._rx(self._user_gas_msg(True))
+    self.assertFalse(self._tx(self._cam_frame("FSM3", hard, VOLVO_MAIN_BUS)))  # driver on the gas
+    self._rx(self._user_gas_msg(False))
+    self.safety.set_controls_allowed(False)
+    self.assertFalse(self._tx(self._cam_frame("FSM3", hard, VOLVO_MAIN_BUS)))  # controls not allowed
+
+  def test_fsm4_brake_request_needs_long_allowed_or_camera_frame(self):
+    brake = {"ACC_BrakeRequest": 1, "ACC_BrakeTarget": 12900, "Byte_5_b7": 1}
+    no_brake = {"ACC_BrakeRequest": 0, "ACC_BrakeTarget": 13328, "Byte_5_b7": 1}
+    self.safety.set_timer(100000)
+    for controls_allowed in (False, True):
+      for gas in (False, True):
+        self.safety.set_controls_allowed(controls_allowed)
+        self._rx(self._user_gas_msg(gas))
+        allowed = controls_allowed and not gas
+        self.assertTrue(self._tx(self._cam_frame("FSM4", no_brake, VOLVO_MAIN_BUS)), f"{controls_allowed=} {gas=}")
+        self.assertEqual(allowed, self._tx(self._cam_frame("FSM4", brake, VOLVO_MAIN_BUS)), f"{controls_allowed=} {gas=}")
+    # the camera's own brake request goes back unchanged even without OP's long (ACC off, driver on the gas)
+    self.safety.set_controls_allowed(False)
+    self._rx(self._cam_frame("FSM4", brake, VOLVO_PARTY_BUS))
+    self.assertTrue(self._tx(self._cam_frame("FSM4", brake, VOLVO_MAIN_BUS)))
+    self.assertFalse(self._tx(self._cam_frame("FSM4", brake | {"ACC_BrakeTarget": 12000}, VOLVO_MAIN_BUS)))
 
   def test_fwd_hook_blocks_fsm_when_controls_allowed(self):
     # When controls are allowed and gas is not pressed, OP relays FSM1/FSM3 itself,

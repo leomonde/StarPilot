@@ -37,33 +37,51 @@
 
 static bool volvo_eucd;
 
-static const AngleSteeringLimits VOLVO_EUCD_STEERING_LIMITS = {
-  .max_angle = 9000,  // 90 deg
-  .angle_deg_to_can = 100,
-  .angle_rate_up_lookup = {
-    {0., 5., 15.},
-    {5., .8, .15}
-  },
-  .angle_rate_down_lookup = {
-    {0., 5., 15.},
-    {5., 3.5, .4}
-  },
-  // OP sends LKAAngleReq=0 with LKASteerDirection=NONE when not steering, so the
-  // commanded angle must be exactly zero while disabled (not near the measurement).
-  .inactive_angle_is_zero = true,
-};
+// The camera's own FSM3/FSM4 just received: OP may send them back unchanged beyond its limits (the camera's hard
+// brake, its brake request while OP's long is not allowed), but nothing else
+#define VOLVO_EUCD_CAM_FRAMES 4U
+#define VOLVO_EUCD_CAM_FRAME_MAX_AGE_US 100000U
+typedef struct {
+  uint8_t data[VOLVO_EUCD_CAM_FRAMES][8];
+  uint32_t ts[VOLVO_EUCD_CAM_FRAMES];
+  bool valid[VOLVO_EUCD_CAM_FRAMES];
+  uint8_t index;
+} VolvoCamFrames;
+static VolvoCamFrames volvo_eucd_cam_fsm3;
+static VolvoCamFrames volvo_eucd_cam_fsm4;
 
-// FSM3 byte1 = ACC_AccelerationRequest (factor 0.04, offset -5.04); raw_accel = byte1 - 126.
-// +50 raw = +2.0 m/s^2 max accel; -100 raw = -4.0 m/s^2 max decel.
-static const LongitudinalLimits VOLVO_EUCD_LONG_LIMITS = {
-  .max_accel = 50,
-  .min_accel = -100,
-  .inactive_accel = 0,
-};
+static void volvo_cam_frames_clear(VolvoCamFrames *frames) {
+  frames->index = 0U;
+  for (uint8_t i = 0U; i < VOLVO_EUCD_CAM_FRAMES; i++) {
+    frames->valid[i] = false;
+  }
+}
+
+static void volvo_cam_frames_store(VolvoCamFrames *frames, const CANPacket_t *msg) {
+  for (uint8_t byte = 0U; byte < 8U; byte++) {
+    frames->data[frames->index][byte] = msg->data[byte];
+  }
+  frames->ts[frames->index] = microsecond_timer_get();
+  frames->valid[frames->index] = true;
+  frames->index = (frames->index + 1U) % VOLVO_EUCD_CAM_FRAMES;
+}
+
+static bool volvo_cam_frames_match(const VolvoCamFrames *frames, const CANPacket_t *msg) {
+  const uint32_t now = microsecond_timer_get();
+  bool matches_cam = false;
+  for (uint8_t i = 0U; i < VOLVO_EUCD_CAM_FRAMES; i++) {
+    bool matches = frames->valid[i] && (safety_get_ts_elapsed(now, frames->ts[i]) <= VOLVO_EUCD_CAM_FRAME_MAX_AGE_US);
+    for (uint8_t byte = 0U; byte < 8U; byte++) {
+      matches &= msg->data[byte] == frames->data[i][byte];
+    }
+    matches_cam |= matches;
+  }
+  return matches_cam;
+}
 
 static void volvo_eucd_rx_hook(const CANPacket_t *msg) {
-  int addr = msg->addr;
   if (msg->bus == VOLVO_MAIN_BUS) {
+    const unsigned int addr = msg->addr;
     if (addr == VOLVO_EUCD_VehicleSpeed1) {
       // Signal: VehicleSpeed
       unsigned int speed_raw = (GET_BYTES(msg, 6, 1) << 8) | GET_BYTES(msg, 7, 1);
@@ -100,10 +118,46 @@ static void volvo_eucd_rx_hook(const CANPacket_t *msg) {
   }
 }
 
+// Every frame, not only the rx-checked ones: the camera's FSM3/FSM4 as it sends them
+static void volvo_rx_all_hook(const CANPacket_t *msg) {
+  if (volvo_eucd && (msg->bus == VOLVO_PARTY_BUS)) {
+    if (msg->addr == VOLVO_EUCD_FSM3) {
+      volvo_cam_frames_store(&volvo_eucd_cam_fsm3, msg);
+    }
+    if (msg->addr == VOLVO_EUCD_FSM4) {
+      volvo_cam_frames_store(&volvo_eucd_cam_fsm4, msg);
+    }
+  }
+}
+
 static bool volvo_eucd_tx_hook(const CANPacket_t *msg) {
+  static const AngleSteeringLimits VOLVO_EUCD_STEERING_LIMITS = {
+    .max_angle = 9000,  // 90 deg
+    .angle_deg_to_can = 100,
+    .angle_rate_up_lookup = {
+      {0., 5., 15.},
+      {5., .8, .15}
+    },
+    .angle_rate_down_lookup = {
+      {0., 5., 15.},
+      {5., 3.5, .4}
+    },
+    // OP sends LKAAngleReq=0 with LKASteerDirection=NONE when not steering, so the
+    // commanded angle must be exactly zero while disabled (not near the measurement).
+    .inactive_angle_is_zero = true,
+  };
+
+  // FSM3 byte1 = ACC_AccelerationRequest (factor 0.04, offset -5.04); raw_accel = byte1 - 126.
+  // +50 raw = +2.0 m/s^2 max accel; -88 raw = -3.52 m/s^2 max decel (openpilot's -3.5 on the 0.04 step).
+  static const LongitudinalLimits VOLVO_EUCD_LONG_LIMITS = {
+    .max_accel = 50,
+    .min_accel = -88,
+    .inactive_accel = 0,
+  };
+
   bool tx = true;
   bool violation = false;
-  int addr = msg->addr;
+  const unsigned int addr = msg->addr;
 
   // Safety check for CC button signals to the car. The camera bus gets every CEM frame relayed by OP (driver's
   // buttons included), which cannot engage the ECM.
@@ -141,11 +195,24 @@ static bool volvo_eucd_tx_hook(const CANPacket_t *msg) {
     // When controls are not allowed, only the inactive (neutral) accel is permitted so OP
     // can relay stock FSM3 at 50Hz without faulting the ECU. When controls are allowed,
     // enforce the standard accel range.
-    bool accel_violation = controls_allowed ? longitudinal_accel_checks(raw_accel, VOLVO_EUCD_LONG_LIMITS)
-                                             : (raw_accel != VOLVO_EUCD_LONG_LIMITS.inactive_accel);
+    // The camera's own frame (its hard brake below the limit) may go back unchanged while OP's long is allowed.
+    const bool cam_frame = get_longitudinal_allowed() && volvo_cam_frames_match(&volvo_eucd_cam_fsm3, msg);
+    bool accel_violation;
+    if (controls_allowed) {
+      accel_violation = longitudinal_accel_checks(raw_accel, VOLVO_EUCD_LONG_LIMITS) && !cam_frame;
+    } else {
+      accel_violation = raw_accel != VOLVO_EUCD_LONG_LIMITS.inactive_accel;
+    }
     if (accel_violation) {
       violation = true;
     }
+  }
+
+  // FSM4 hydraulic brake request only with OP's long allowed, or the camera's own frame sent back unchanged (its
+  // brake request while OP does not control, e.g. with ACC off or the driver on the gas: route 807).
+  if (addr == VOLVO_EUCD_FSM4) {
+    const bool brake_request = (GET_BYTES(msg, 5, 1) & 0x40U) != 0U;
+    violation |= brake_request && !get_longitudinal_allowed() && !volvo_cam_frames_match(&volvo_eucd_cam_fsm4, msg);
   }
 
   if (violation) {
@@ -159,18 +226,20 @@ static bool volvo_eucd_fwd_hook(int bus_num, int addr) {
   bool block_msg = false;
   // camera FSM1/FSM3 blocked while OP controls (OP sends them)
   if (((unsigned int)bus_num == VOLVO_PARTY_BUS) && controls_allowed && !gas_pressed) {
-    if ((addr == VOLVO_EUCD_FSM1) || (addr == VOLVO_EUCD_FSM3)) {
+    if (((unsigned int)addr == VOLVO_EUCD_FSM1) || ((unsigned int)addr == VOLVO_EUCD_FSM3)) {
       block_msg = true;
     }
   }
   // FSM0 never forwarded main->cam (check_relay on the cam bus would trip on the camera's own FSM0)
-  if (((unsigned int)bus_num == VOLVO_MAIN_BUS) && (addr == VOLVO_EUCD_FSM0)) {
+  if (((unsigned int)bus_num == VOLVO_MAIN_BUS) && ((unsigned int)addr == VOLVO_EUCD_FSM0)) {
     block_msg = true;
   }
   return block_msg;
 }
 
 static safety_config volvo_eucd_init(void) {
+  volvo_cam_frames_clear(&volvo_eucd_cam_fsm3);
+  volvo_cam_frames_clear(&volvo_eucd_cam_fsm4);
   static const CanMsg VOLVO_EUCD_TX_MSGS[] = {
     {VOLVO_EUCD_CCButtons, VOLVO_MAIN_BUS,  8, .check_relay = false},
     // relayed by OP with Set to re-engage the camera's ACC; check_relay so the CEM's frame does not pass along with it
@@ -285,7 +354,8 @@ static bool volvo_lca5_stock_relay(const CANPacket_t *msg) {
 }
 
 static int volvo_be_15(const CANPacket_t *msg, uint8_t byte) {
-  return (int)(((uint16_t)(msg->data[byte] & 0x7FU) << 8U) | msg->data[byte + 1U]);
+  const uint16_t raw = ((uint16_t)(msg->data[byte] & 0x7FU) << 8U) | msg->data[byte + 1U];
+  return (int)raw;
 }
 
 static int volvo_pscm_angle(const CANPacket_t *msg) {
@@ -297,11 +367,13 @@ static int volvo_lca_5_angle(const CANPacket_t *msg) {
 }
 
 static int volvo_c1_pscm_angle(const CANPacket_t *msg) {
-  return (int)(((uint16_t)msg->data[5] << 8U) | msg->data[6]) - 32768;
+  const uint16_t raw = ((uint16_t)msg->data[5] << 8U) | msg->data[6];
+  return (int)raw - 32768;
 }
 
 static int volvo_c1_fsm_angle(const CANPacket_t *msg) {
-  return (int)(((uint16_t)(msg->data[4] & 0x3FU) << 8U) | msg->data[5]) - 8192;
+  const uint16_t raw = ((uint16_t)(msg->data[4] & 0x3FU) << 8U) | msg->data[5];
+  return (int)raw - 8192;
 }
 
 static uint8_t volvo_c1_fsm_checksum(const CANPacket_t *msg) {
@@ -311,70 +383,32 @@ static uint8_t volvo_c1_fsm_checksum(const CANPacket_t *msg) {
   return checksum_sum ^ 0xFFU;
 }
 
-static const AngleSteeringLimits VOLVO_ANGLE_STEERING_LIMITS = {
-  .max_angle = VOLVO_MAX_ANGLE_CAN,
-  .angle_deg_to_can = VOLVO_ANGLE_DEG_TO_CAN,
-  .angle_rate_up_lookup = {
-    {0.0f, 5.0f, 25.0f},
-    {5.0f, 3.0f, 0.4f},
-  },
-  .angle_rate_down_lookup = {
-    {0.0f, 5.0f, 25.0f},
-    {10.0f, 4.0f, 0.6f},
-  },
-  .frequency = 50U,
-};
-
-static const AngleSteeringLimits VOLVO_C1_ANGLE_STEERING_LIMITS = {
-  .max_angle = VOLVO_C1_MAX_ANGLE_CAN,
-  .angle_deg_to_can = VOLVO_C1_ANGLE_DEG_TO_CAN,
-  .angle_rate_up_lookup = {
-    {7.0f, 17.0f, 36.0f},
-    {2.0f, 0.25f, 0.1f},
-  },
-  .angle_rate_down_lookup = {
-    {7.0f, 17.0f, 36.0f},
-    {2.0f, 0.25f, 0.1f},
-  },
-  .max_angle_error = 455,  // 20 degrees
-  .angle_error_min_speed = 0.0f,
-  .frequency = 50U,
-  .enforce_angle_error = true,
-};
-
-static void volvo_rx_hook(const CANPacket_t *msg) {
-
-  if (volvo_eucd) {
-    volvo_eucd_rx_hook(msg);
-    return;
-  }
-
-  if (volvo_c1) {
-    if (msg->bus == VOLVO_MAIN_BUS) {
-      if (msg->addr == VOLVO_C1_PSCM_1) {
-        update_sample(&angle_meas, volvo_c1_pscm_angle(msg));
-      }
-
-      if (msg->addr == VOLVO_C1_SPEED) {
-        const uint16_t speed_raw = ((uint16_t)msg->data[6] << 8U) | msg->data[7];
-        const float speed = ((float)speed_raw * 0.01f) / 3.6f;
-        vehicle_moving = speed > 0.1f;
-        UPDATE_VEHICLE_SPEED(speed);
-      }
-
-      if (msg->addr == VOLVO_C1_PEDAL_AND_BRAKE) {
-        const uint16_t gas_raw = ((uint16_t)(msg->data[1] & 0x3U) << 8U) | msg->data[2];
-        gas_pressed = gas_raw > 50U;  // DBC factor 0.1: greater than 5 percent
-        brake_pressed = GET_BIT(msg, 24U) || GET_BIT(msg, 38U);
-      }
+static void volvo_c1_rx_hook(const CANPacket_t *msg) {
+  if (msg->bus == VOLVO_MAIN_BUS) {
+    if (msg->addr == VOLVO_C1_PSCM_1) {
+      update_sample(&angle_meas, volvo_c1_pscm_angle(msg));
     }
 
-    if ((msg->bus == VOLVO_PARTY_BUS) && (msg->addr == VOLVO_C1_FSM_0)) {
-      pcm_cruise_check(GET_BIT(msg, 58U));
+    if (msg->addr == VOLVO_C1_SPEED) {
+      const uint16_t speed_raw = ((uint16_t)msg->data[6] << 8U) | msg->data[7];
+      const float speed = ((float)speed_raw * 0.01f) / 3.6f;
+      vehicle_moving = speed > 0.1f;
+      UPDATE_VEHICLE_SPEED(speed);
     }
-    return;
+
+    if (msg->addr == VOLVO_C1_PEDAL_AND_BRAKE) {
+      const uint16_t gas_raw = ((uint16_t)(msg->data[1] & 0x3U) << 8U) | msg->data[2];
+      gas_pressed = gas_raw > 50U;  // DBC factor 0.1: greater than 5 percent
+      brake_pressed = GET_BIT(msg, 24U) || GET_BIT(msg, 38U);
+    }
   }
 
+  if ((msg->bus == VOLVO_PARTY_BUS) && (msg->addr == VOLVO_C1_FSM_0)) {
+    pcm_cruise_check(GET_BIT(msg, 58U));
+  }
+}
+
+static void volvo_lca_rx_hook(const CANPacket_t *msg) {
   // Main bus (bus 0) messages
   if (msg->bus == VOLVO_MAIN_BUS) {
     if (msg->addr == VOLVO_LCA_5) {
@@ -456,39 +490,78 @@ static void volvo_rx_hook(const CANPacket_t *msg) {
   }
 }
 
-static bool volvo_tx_hook(const CANPacket_t *msg) {
+static void volvo_rx_hook(const CANPacket_t *msg) {
+  if (volvo_eucd) {
+    volvo_eucd_rx_hook(msg);
+  } else if (volvo_c1) {
+    volvo_c1_rx_hook(msg);
+  } else {
+    volvo_lca_rx_hook(msg);
+  }
+}
+
+static bool volvo_c1_tx_hook(const CANPacket_t *msg) {
+  static const AngleSteeringLimits VOLVO_C1_ANGLE_STEERING_LIMITS = {
+    .max_angle = VOLVO_C1_MAX_ANGLE_CAN,
+    .angle_deg_to_can = VOLVO_C1_ANGLE_DEG_TO_CAN,
+    .angle_rate_up_lookup = {
+      {7.0f, 17.0f, 36.0f},
+      {2.0f, 0.25f, 0.1f},
+    },
+    .angle_rate_down_lookup = {
+      {7.0f, 17.0f, 36.0f},
+      {2.0f, 0.25f, 0.1f},
+    },
+    .max_angle_error = 455,  // 20 degrees
+    .angle_error_min_speed = 0.0f,
+    .frequency = 50U,
+    .enforce_angle_error = true,
+  };
+
   bool tx = true;
 
-  if (volvo_eucd) {
-    return volvo_eucd_tx_hook(msg);
+  if (msg->addr == VOLVO_C1_FSM_1) {
+    const int desired_angle = volvo_c1_fsm_angle(msg);
+    const uint8_t direction = msg->data[7] & 0x3U;
+    const bool steer_control_enabled = direction != 0U;
+    tx &= SAFETY_ABS(desired_angle) <= VOLVO_C1_MAX_ANGLE_CAN;
+    tx &= !steer_angle_cmd_checks(desired_angle, steer_control_enabled, VOLVO_C1_ANGLE_STEERING_LIMITS);
+    tx &= (direction == 0U) || (direction == 3U);
+    tx &= (msg->data[0] == 0xE3U) && (msg->data[1] == 0xB4U) && (msg->data[2] == 0x08U);
+    tx &= (msg->data[3] == 0x80U) && ((msg->data[4] & 0xC0U) == 0x80U) && ((msg->data[7] & 0xFCU) == 0x94U);
+    tx &= msg->data[6] == volvo_c1_fsm_checksum(msg);
   }
 
-  if (volvo_c1) {
-    if (msg->addr == VOLVO_C1_FSM_1) {
-      const int desired_angle = volvo_c1_fsm_angle(msg);
-      const uint8_t direction = msg->data[7] & 0x3U;
-      const bool steer_control_enabled = direction != 0U;
-      tx &= SAFETY_ABS(desired_angle) <= VOLVO_C1_MAX_ANGLE_CAN;
-      tx &= !steer_angle_cmd_checks(desired_angle, steer_control_enabled, VOLVO_C1_ANGLE_STEERING_LIMITS);
-      tx &= (direction == 0U) || (direction == 3U);
-      tx &= (msg->data[0] == 0xE3U) && (msg->data[1] == 0xB4U) && (msg->data[2] == 0x08U);
-      tx &= (msg->data[3] == 0x80U) && ((msg->data[4] & 0xC0U) == 0x80U) && ((msg->data[7] & 0xFCU) == 0x94U);
-      tx &= msg->data[6] == volvo_c1_fsm_checksum(msg);
-    }
-
-    if (msg->addr == VOLVO_C1_PSCM_1) {
-      const int relayed_angle = volvo_c1_pscm_angle(msg);
-      const int measured_max = angle_meas.max + VOLVO_C1_RELAY_ANGLE_TOLERANCE;
-      const int measured_min = angle_meas.min - VOLVO_C1_RELAY_ANGLE_TOLERANCE;
-      tx &= !safety_max_limit_check(relayed_angle, measured_max, measured_min);
-    }
-
-    // Only ACC cancel (byte 7 bit 4) may be synthesized.
-    if (msg->addr == VOLVO_C1_BUTTONS) {
-      tx &= ((msg->data[7] & 0xEFU) == 0U) && (msg->data[6] == 0U);
-    }
-    return tx;
+  if (msg->addr == VOLVO_C1_PSCM_1) {
+    const int relayed_angle = volvo_c1_pscm_angle(msg);
+    const int measured_max = angle_meas.max + VOLVO_C1_RELAY_ANGLE_TOLERANCE;
+    const int measured_min = angle_meas.min - VOLVO_C1_RELAY_ANGLE_TOLERANCE;
+    tx &= !safety_max_limit_check(relayed_angle, measured_max, measured_min);
   }
+
+  // Only ACC cancel (byte 7 bit 4) may be synthesized.
+  if (msg->addr == VOLVO_C1_BUTTONS) {
+    tx &= ((msg->data[7] & 0xEFU) == 0U) && (msg->data[6] == 0U);
+  }
+  return tx;
+}
+
+static bool volvo_lca_tx_hook(const CANPacket_t *msg) {
+  static const AngleSteeringLimits VOLVO_ANGLE_STEERING_LIMITS = {
+    .max_angle = VOLVO_MAX_ANGLE_CAN,
+    .angle_deg_to_can = VOLVO_ANGLE_DEG_TO_CAN,
+    .angle_rate_up_lookup = {
+      {0.0f, 5.0f, 25.0f},
+      {5.0f, 3.0f, 0.4f},
+    },
+    .angle_rate_down_lookup = {
+      {0.0f, 5.0f, 25.0f},
+      {10.0f, 4.0f, 0.6f},
+    },
+    .frequency = 50U,
+  };
+
+  bool tx = true;
 
   // LCA_5 carries the actual angle command used by the controller. The stock
   // LCA frame also contains an angle-shaped field, but the imported controller
@@ -506,11 +579,14 @@ static bool volvo_tx_hook(const CANPacket_t *msg) {
   // Keep the two torque-authority arms and the companion LCA angle bounded even
   // though these fields are not the primary steering command.
   if (msg->addr == VOLVO_LCA_STEER) {
-    const int authority_pos = to_signed((int)(((uint16_t)(msg->data[0] & 0x07U) << 8U) | msg->data[1]), 11);
-    const int authority_neg = to_signed((int)(((uint16_t)(msg->data[2] & 0x07U) << 8U) | msg->data[3]), 11);
-    const int lca_angle = to_signed((int)(((uint16_t)(msg->data[5] & 0x3FU) << 8U) | msg->data[6]), 14);
-    tx &= authority_pos >= 0 && authority_pos <= 614;
-    tx &= authority_neg >= -614 && authority_neg <= 0;
+    const uint16_t authority_pos_raw = ((uint16_t)(msg->data[0] & 0x07U) << 8U) | msg->data[1];
+    const uint16_t authority_neg_raw = ((uint16_t)(msg->data[2] & 0x07U) << 8U) | msg->data[3];
+    const uint16_t lca_angle_raw = ((uint16_t)(msg->data[5] & 0x3FU) << 8U) | msg->data[6];
+    const int authority_pos = to_signed((int)authority_pos_raw, 11);
+    const int authority_neg = to_signed((int)authority_neg_raw, 11);
+    const int lca_angle = to_signed((int)lca_angle_raw, 14);
+    tx &= (authority_pos >= 0) && (authority_pos <= 614);
+    tx &= (authority_neg >= -614) && (authority_neg <= 0);
     tx &= SAFETY_ABS(lca_angle) <= VOLVO_MAX_ANGLE_CAN;
   }
 
@@ -589,34 +665,34 @@ static bool volvo_tx_hook(const CANPacket_t *msg) {
   return tx;
 }
 
-static safety_config volvo_init(uint16_t param) {
-  bool spa = GET_FLAG(param, VOLVO_FLAG_SPA);
-  volvo_c1 = GET_FLAG(param, VOLVO_FLAG_C1);
-  volvo_eucd = GET_FLAG(param, VOLVO_FLAG_EUCD);
-  volvo_stock_lca5_index = 0U;
-  for (uint8_t i = 0U; i < VOLVO_STOCK_LCA5_FRAMES; i++) {
-    volvo_stock_lca5_valid[i] = false;
-  }
-
+static bool volvo_tx_hook(const CANPacket_t *msg) {
+  bool tx;
   if (volvo_eucd) {
-    return volvo_eucd_init();
+    tx = volvo_eucd_tx_hook(msg);
+  } else if (volvo_c1) {
+    tx = volvo_c1_tx_hook(msg);
+  } else {
+    tx = volvo_lca_tx_hook(msg);
   }
+  return tx;
+}
 
-  if (volvo_c1) {
-    static const CanMsg VOLVO_C1_TX_MSGS[] = {
-      {VOLVO_C1_FSM_1, VOLVO_MAIN_BUS, 8, .check_relay = true},
-      {VOLVO_C1_PSCM_1, VOLVO_PARTY_BUS, 8, .check_relay = true},
-      {VOLVO_C1_BUTTONS, VOLVO_MAIN_BUS, 8, .check_relay = false},
-    };
-    static RxCheck volvo_c1_rx_checks[] = {
-      {.msg = {{VOLVO_C1_PSCM_1, VOLVO_MAIN_BUS, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},
-      {.msg = {{VOLVO_C1_FSM_0, VOLVO_PARTY_BUS, 8, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},
-      {.msg = {{VOLVO_C1_PEDAL_AND_BRAKE, VOLVO_MAIN_BUS, 8, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},
-      {.msg = {{VOLVO_C1_SPEED, VOLVO_MAIN_BUS, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},
-    };
-    return BUILD_SAFETY_CFG(volvo_c1_rx_checks, VOLVO_C1_TX_MSGS);
-  }
+static safety_config volvo_c1_init(void) {
+  static const CanMsg VOLVO_C1_TX_MSGS[] = {
+    {VOLVO_C1_FSM_1, VOLVO_MAIN_BUS, 8, .check_relay = true},
+    {VOLVO_C1_PSCM_1, VOLVO_PARTY_BUS, 8, .check_relay = true},
+    {VOLVO_C1_BUTTONS, VOLVO_MAIN_BUS, 8, .check_relay = false},
+  };
+  static RxCheck volvo_c1_rx_checks[] = {
+    {.msg = {{VOLVO_C1_PSCM_1, VOLVO_MAIN_BUS, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},
+    {.msg = {{VOLVO_C1_FSM_0, VOLVO_PARTY_BUS, 8, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},
+    {.msg = {{VOLVO_C1_PEDAL_AND_BRAKE, VOLVO_MAIN_BUS, 8, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},
+    {.msg = {{VOLVO_C1_SPEED, VOLVO_MAIN_BUS, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},
+  };
+  return BUILD_SAFETY_CFG(volvo_c1_rx_checks, VOLVO_C1_TX_MSGS);
+}
 
+static safety_config volvo_lca_init(bool spa) {
   // Set PT bus addresses based on platform
   volvo_ecm_1_addr = spa ? VOLVO_SPA_ECM_1 : VOLVO_CMA_ECM_1;
   volvo_bus1_cruise_control_addr = spa ? VOLVO_SPA_BUS1_CRUISE_CONTROL : VOLVO_CMA_BUS1_CRUISE_CONTROL;
@@ -689,6 +765,26 @@ static safety_config volvo_init(uint16_t param) {
   return ret;
 }
 
+static safety_config volvo_init(uint16_t param) {
+  bool spa = GET_FLAG(param, VOLVO_FLAG_SPA);
+  volvo_c1 = GET_FLAG(param, VOLVO_FLAG_C1);
+  volvo_eucd = GET_FLAG(param, VOLVO_FLAG_EUCD);
+  volvo_stock_lca5_index = 0U;
+  for (uint8_t i = 0U; i < VOLVO_STOCK_LCA5_FRAMES; i++) {
+    volvo_stock_lca5_valid[i] = false;
+  }
+
+  safety_config ret;
+  if (volvo_eucd) {
+    ret = volvo_eucd_init();
+  } else if (volvo_c1) {
+    ret = volvo_c1_init();
+  } else {
+    ret = volvo_lca_init(spa);
+  }
+  return ret;
+}
+
 static bool volvo_fwd_hook(int bus_num, int addr) {
   // Only EUCD needs a custom fwd hook; CMA/SPA/C1 stock LCA is always blocked by .check_relay = true.
   return volvo_eucd && volvo_eucd_fwd_hook(bus_num, addr);
@@ -697,6 +793,7 @@ static bool volvo_fwd_hook(int bus_num, int addr) {
 const safety_hooks volvo_hooks = {
   .init = volvo_init,
   .rx = volvo_rx_hook,
+  .rx_all = volvo_rx_all_hook,
   .tx = volvo_tx_hook,
   .fwd = volvo_fwd_hook,
 };
