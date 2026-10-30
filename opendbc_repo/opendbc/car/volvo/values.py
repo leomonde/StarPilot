@@ -109,7 +109,7 @@ class CarControllerParams:
   # speed, braking, OP owns the ECM with the camera's last clean FSM0/FSM3/FSM4 and the camera is shown ACC standby.
   # The camera cancels slow with no target (FSM3 NoTargetCancel, then FSM0 abort 0x10, routes 827/895): never engaged then
   EUCD_FULL_STOP = True
-  EUCD_FULL_STOP_ENTER_SPEED = 30. * CV.KPH_TO_MS  # OP takes the ECM below this while braking (the camera's ACC minimum)
+  EUCD_FULL_STOP_ENTER_SPEED = 25. * CV.KPH_TO_MS  # OP takes the ECM below this while braking; 30 handed back and forth with the resync at 32 (route 89b)
   EUCD_STOPPING_FLAG_SPEED = 2.6 * CV.KPH_TO_MS  # FSM4 b1 F1 -> F9 below this
   EUCD_HOLD_RELEASE_FRAMES = int(0.05 / DT_CTRL)  # brake request released after the car's hold
   EUCD_STANDSTILL_DELAY = 3.0  # s stopped before FSM3 ACC_Standstill
