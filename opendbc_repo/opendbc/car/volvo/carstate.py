@@ -264,7 +264,7 @@ class CarState(CarStateBase):
     else:
       ret.cruiseState.standstill = bool(cam_cp.vl["FSM3"]["ACC_Standstill"]) and ret.standstill
     # The car holds the stop (BrakeReqAck b0 bit7, route 807)
-    self.eucd_car_hold = bool(int(pt_cp.vl["BrakeReqAck"]["Byte_0"]) & 0x80)
+    self.eucd_car_hold = bool(pt_cp.vl["BrakeReqAck"]["StandstillHold"])
     ret.cruiseState.nonAdaptive = False
     ret.accFaulted = False
     self.eucd_acc_distance = cam_cp.vl["FSM1"]["ACC_Distance"]

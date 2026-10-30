@@ -57,7 +57,7 @@ class EucdFullStop:
     if CS.eucd_ecm_acc_engaged and not cancelled and not self.active:
       for f in CS.eucd_stock_FSM0_frames:
         self.tpl_fsm0[int(f["Byte_0"])] = f
-      self.tpl_fsm3["data" if int(CS.eucd_stock_FSM3["Byte_4"]) == 0x81 else "type"] = dict(CS.eucd_stock_FSM3)
+      self.tpl_fsm3["data" if int(CS.eucd_stock_FSM3["FrameKind"]) == 0x81 else "type"] = dict(CS.eucd_stock_FSM3)
       if CS.eucd_stock_FSM4_frames:
         self.tpl_fsm4 = CS.eucd_stock_FSM4_frames[-1]
 
@@ -165,7 +165,7 @@ class EucdFullStop:
     """FSM3 base: the camera's, or its clean template (same data/type cadence)."""
     if not self.active:
       return CS.eucd_stock_FSM3
-    kind = "data" if int(CS.eucd_stock_FSM3["Byte_4"]) == 0x81 else "type"
+    kind = "data" if int(CS.eucd_stock_FSM3["FrameKind"]) == 0x81 else "type"
     return self.tpl_fsm3[kind]
 
   def fsm4(self, stock_fsm4):
@@ -173,9 +173,8 @@ class EucdFullStop:
     request released while the car holds."""
     # b0 alternates 55/AA as the camera's
     fsm4 = {**self.tpl_fsm4, "Byte_0": stock_fsm4["Byte_0"], "ACC_BrakeRequest": 0}
-    # b1 F9: stopping
-    byte_1 = int(fsm4["Byte_1"])
-    fsm4["Byte_1"] = (byte_1 | 0x08) if self.stopping else (byte_1 & ~0x08)
+    # b1 F1 -> F9: stopping
+    fsm4["ACC_Stopping"] = int(self.stopping)
     if self.holding:
       # The car holds: brake request released, like the camera 50 ms after the hold
       fsm4 |= {"Byte_5_b7": 1, "ACC_BrakeRequest": 0, "ACC_BrakeTarget": eucd_fsm4_brake_value(0., False) & 0x3FFF}

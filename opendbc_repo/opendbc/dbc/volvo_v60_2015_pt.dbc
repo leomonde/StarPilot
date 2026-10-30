@@ -163,7 +163,9 @@ BO_ 522 Brake_Info: 8 XXX
 BO_ 544 wheelspeed1: 8 BCM
  SG_ WhlSpdRR : 39|16@0+ (0.01,-327.68) [0|65535] "" XXX
  SG_ WhlSpdLR : 55|16@0+ (0.01,-327.68) [0|65535] "" XXX
- SG_ Byte_0 : 7|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_0_b7 : 7|1@0+ (1,0) [0|1] "" XXX
+ SG_ StandstillHold : 6|1@0+ (1,0) [0|1] "" XXX
+ SG_ Byte_0_b5_0 : 5|6@0+ (1,0) [0|63] "" XXX
  SG_ Byte_1 : 15|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_2_b7_3 : 23|5@0+ (1,0) [0|31] "" XXX
  SG_ BrakeReqActive : 18|1@0+ (1,0) [0|1] "" XXX
@@ -229,7 +231,7 @@ BO_ 624 FSM3: 8 FSM
  SG_ Byte_2_b4_2 : 20|3@0+ (1,0) [0|7] "" XXX
  SG_ ACC_Mode : 17|2@0+ (1,0) [0|3] "" XXX
  SG_ ACC_TractionRequest : 31|8@0+ (1,0) [0|255] "" XXX
- SG_ Byte_4 : 39|8@0+ (1,0) [0|255] "" XXX
+ SG_ FrameKind : 39|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_5 : 47|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_6 : 55|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_7 : 63|8@0+ (1,0) [0|255] "" XXX
@@ -244,7 +246,9 @@ BO_ 750 HandBrake: 8 XXX
 
 BO_ 794 FSM4: 8 FSM
  SG_ Byte_0 : 7|8@0+ (1,0) [0|255] "" XXX
- SG_ Byte_1 : 15|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_1_b7_4 : 15|4@0+ (1,0) [0|15] "" XXX
+ SG_ ACC_Stopping : 11|1@0+ (1,0) [0|1] "" XXX
+ SG_ Byte_1_b2_0 : 10|3@0+ (1,0) [0|7] "" XXX
  SG_ Byte_2 : 23|8@0+ (1,0) [0|255] "" XXX
  SG_ ACC_LeadSpeed : 31|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_4 : 39|8@0+ (1,0) [0|255] "" XXX
@@ -254,7 +258,8 @@ BO_ 794 FSM4: 8 FSM
  SG_ Byte_7 : 63|8@0+ (1,0) [0|255] "" XXX
 
 BO_ 665 BrakeReqAck: 8 XXX
- SG_ Byte_0 : 7|8@0+ (1,0) [0|255] "" XXX
+ SG_ StandstillHold : 7|1@0+ (1,0) [0|1] "" XXX
+ SG_ Byte_0_b6_0 : 6|7@0+ (1,0) [0|127] "" XXX
  SG_ Byte_1 : 15|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_2 : 23|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_3 : 31|8@0+ (1,0) [0|255] "" XXX
@@ -269,7 +274,10 @@ BO_ 802 StartStop: 8 XXX
  SG_ StartStop : 8|1@0+ (1,0) [0|1] "" XXX
 
 BO_ 805 AccHold: 8 XXX
- SG_ Byte_0 : 7|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_0_b7 : 7|1@0+ (1,0) [0|1] "" XXX
+ SG_ ACC_Engaged : 6|1@0+ (1,0) [0|1] "" XXX
+ SG_ Byte_0_b5_2 : 5|4@0+ (1,0) [0|15] "" XXX
+ SG_ ACC_StandstillHold : 1|2@0+ (1,0) [0|3] "" XXX
  SG_ Byte_1 : 15|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_2 : 23|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_3 : 31|8@0+ (1,0) [0|255] "" XXX

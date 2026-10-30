@@ -548,7 +548,7 @@ def create_eucd_cam_brake_level(packer, stock_brake_level, frozen_level: int | N
 
 def create_eucd_cam_wheel_status(packer, stock_wheelspeed1, mask: bool, spoof: bool = False, hide_hold: bool = False,
                                  show_standby: bool = False):
-  # wheelspeed1 to the camera; brake request bit masked or spoofed, standstill hold (b0 bit6) hidden,
+  # wheelspeed1 to the camera; brake request bit masked or spoofed, standstill hold hidden,
   # ACC brake applied hidden in the standby view
   values = _eucd_copy(stock_wheelspeed1, skip=("WhlSpdRR", "WhlSpdLR"))
   if mask:
@@ -561,19 +561,19 @@ def create_eucd_cam_wheel_status(packer, stock_wheelspeed1, mask: bool, spoof: b
     # Engaged, it answers the camera's own brake mode: hidden then, the camera aborts 0x10 (route 892)
     values["ACC_BrakeApplied"] = 0
   if hide_hold:
-    values["Byte_0"] = int(values["Byte_0"]) & ~0x40
+    values["StandstillHold"] = 0
   return packer.make_can_msg("wheelspeed1", CANBUS.cam, values)
 
 
 def create_eucd_cam_brake_request_ack(packer, stock_brake_req_ack, mask: bool, spoof: bool = False, hide_hold: bool = False):
-  # BrakeReqAck to the camera; brake ack (active low) masked or spoofed, standstill hold (b0 bit7) hidden
+  # BrakeReqAck to the camera; brake ack (active low) masked or spoofed, standstill hold hidden
   values = _eucd_copy(stock_brake_req_ack)
   if mask:
     values["BrakeReqNotAck"] = 1
   elif spoof:
     values["BrakeReqNotAck"] = 0
   if hide_hold:
-    values["Byte_0"] = int(values["Byte_0"]) & ~0x80
+    values["StandstillHold"] = 0
   return packer.make_can_msg("BrakeReqAck", CANBUS.cam, values)
 
 
@@ -598,7 +598,7 @@ def create_eucd_cam_acc_hold(packer, stock_acc_hold, show_standby: bool):
   # 0x325 to the camera; show_standby: no ACC engaged (C4) nor ACC standstill hold (87), as standby (84)
   values = _eucd_copy(stock_acc_hold)
   if show_standby:
-    values["Byte_0"] = int(values["Byte_0"]) & ~0x43
+    values |= {"ACC_Engaged": 0, "ACC_StandstillHold": 0}
   return packer.make_can_msg("AccHold", CANBUS.cam, values)
 
 
