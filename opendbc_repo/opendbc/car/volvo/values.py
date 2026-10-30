@@ -115,6 +115,7 @@ class CarControllerParams:
   EUCD_STANDSTILL_DELAY = 3.0  # s stopped before FSM3 ACC_Standstill
   EUCD_HOLD_ACCEL = -0.08  # m/s^2, FSM3 accel while the car holds (raw 0x7C)
   EUCD_GO_RETRY_TIME = 2.0  # s still stopped after the resume burst -> standstill again, retry
+  EUCD_ECM_READY_TIMEOUT = 3.0  # s after FSM3 ACC_Standstill: resume sent even without the ECM's ready (seen 1.5 s)
   # The camera is shown the driver's side of it: ACC standby (EngineData, 0x325) for the whole stop, so it never
   # aborts nor alerts. It follows the ECM's ACC state (route 881), so it re-engages like on the driver's Set:
   # Set on its bus, then EngineData engaged again 30 ms later

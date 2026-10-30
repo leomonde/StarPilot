@@ -387,7 +387,7 @@ class CarController(CarControllerBase):
       # In OP's stop only the planner's resume drives off (cruiseControl.resume, as Ford/Toyota): the camera's distance
       # jitter drove off while OP still asked to stop (route 884, 30.9 s)
       lead_moved = CS.eucd_acc_distance > self.eucd_distance and not self.eucd_full_stop.active
-      if at_standstill and self.eucd_waiting and (lead_moved or op_resume):
+      if at_standstill and self.eucd_waiting and (lead_moved or op_resume) and self.eucd_full_stop.drive_off_ready(CS):
         can_sends.extend(self._eucd_resume_burst())
         if self.eucd_sng_count == 0:
           self.eucd_sng_ack_frames = 25

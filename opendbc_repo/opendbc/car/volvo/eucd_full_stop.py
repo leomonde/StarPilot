@@ -147,6 +147,13 @@ class EucdFullStop:
     self.cam_standby = False
     self.resync_frames = self.resync_attempts = self.cam_clean_frames = 0
 
+  def drive_off_ready(self, CS) -> bool:
+    """The resume burst may go: the ECM ready to drive off from its standstill (or it never said so in time)."""
+    if not self.active or CS.eucd_ecm_standstill_ready:
+      return True
+    CCP = CarControllerParams
+    return self.stopped_frames * DT_CTRL >= CCP.EUCD_STANDSTILL_DELAY + CCP.EUCD_ECM_READY_TIMEOUT
+
   def take_cam_set(self) -> bool:
     """Set held on the camera's CCButtons this frame."""
     set_plus = self.cam_set_frames > 0

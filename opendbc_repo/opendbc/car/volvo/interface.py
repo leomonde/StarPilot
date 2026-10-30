@@ -49,9 +49,9 @@ class CarInterface(CarInterfaceBase):
       ret.openpilotLongitudinalControl = alpha_long
       if ret.openpilotLongitudinalControl:
         ret.longitudinalActuatorDelay = 0.5  # FSM3 accel to aEgo delay
-        # Integral-only accel loop
+        # Integral-only accel loop: the car brakes 10-25% short of OP's request (routes 896/898/899/89b), 0.1 too slow
         ret.longitudinalTuning.kiBP = [0.]
-        ret.longitudinalTuning.kiV = [0.1]
+        ret.longitudinalTuning.kiV = [0.3]
 
     ret.pcmCruise = True
 
