@@ -15,7 +15,7 @@ from opendbc.car.volvo.volvocan import (create_c1_cancel, create_c1_pscm_message
                                         create_eucd_button_msg, create_eucd_lka_msg, create_eucd_lkas_state_msg, create_eucd_longitudinal,
                                         create_eucd_fsm0, create_eucd_fsm4, create_eucd_radar, create_eucd_cam_brake_level,
                                         create_eucd_cam_brake_status, create_eucd_cam_wheel_status, create_eucd_cam_brake_request_ack,
-                                        create_eucd_cam_brake_hold, create_eucd_cam_button, create_eucd_cam_engine_data,
+                                        create_eucd_cam_brake_hold, create_eucd_cam_button, create_eucd_cam_engine_data, create_eucd_resume_button,
                                         create_eucd_cam_acc_hold,
                                         eucd_next_long_mode)
 from opendbc.car.volvo.values import CAR, CarControllerParams, LongMode, SteerDirection, VolvoC1PlatformConfig, VolvoEUCDPlatformConfig
@@ -43,6 +43,10 @@ class CarController(CarControllerBase):
     self.eucd_sng_count = 0
     self.eucd_op_resume_frames = 0
     self.eucd_sng_ack_frames = 0
+    self.eucd_resume_hold_frames = 0  # Resume held to the ECM, frames left
+    self.eucd_last_ccbuttons = None  # CEM's last CCButtons, copied for the Resume
+    self.eucd_downhill = False
+    self.eucd_downhill_frames = 0  # frames the pitch has been past the enter/exit threshold
     self.eucd_next_long_tx_nanos = 0
     self.EUCD_LONG_TX_PERIOD_NANOS = 20_000_000
     self.eucd_long_mode = LongMode.COAST
@@ -302,6 +306,7 @@ class CarController(CarControllerBase):
       can_sends += self._eucd_lateral(CC, CS)
 
     self.eucd_full_stop.update(CC, CS)
+    self._eucd_update_downhill(CC, CS)
     # Carstate takes the ACC standstill from OP during the stop
     CS.eucd_full_stop_active = self.eucd_full_stop.active
     CS.eucd_full_stop_standstill = self.eucd_full_stop.standstill
@@ -389,7 +394,7 @@ class CarController(CarControllerBase):
       # jitter drove off while OP still asked to stop (route 884, 30.9 s)
       lead_moved = CS.eucd_acc_distance > self.eucd_distance and not self.eucd_full_stop.active
       if at_standstill and self.eucd_waiting and (lead_moved or op_resume) and self.eucd_full_stop.drive_off_ready(CS):
-        can_sends.extend(self._eucd_resume_burst())
+        self.eucd_resume_hold_frames = CCP.EUCD_RESUME_HOLD_FRAMES
         if self.eucd_sng_count == 0:
           self.eucd_sng_ack_frames = 25
         self.eucd_sng_count += 1
@@ -398,8 +403,24 @@ class CarController(CarControllerBase):
         self.eucd_waiting = False
         self.eucd_last_resume_frame = self.frame
 
-  def _eucd_resume_burst(self):
-    return [create_eucd_button_msg(self.packer, resume=True)] * CarControllerParams.EUCD_BUTTON_BURST
+    # Resume held as the driver's: the CEM's frame with Resume pressed, every frame
+    if CS.eucd_stock_CCButtons_frames:
+      self.eucd_last_ccbuttons = CS.eucd_stock_CCButtons_frames[-1]
+    if self.eucd_resume_hold_frames > 0 and self.eucd_last_ccbuttons is not None:
+      can_sends.append(create_eucd_resume_button(self.packer, self.eucd_last_ccbuttons))
+    self.eucd_resume_hold_frames = max(self.eucd_resume_hold_frames - 1, 0)
+
+  def _eucd_update_downhill(self, CC, CS):
+    """Downhill from the calibrated pitch, with hysteresis: carstate reports the set speed + offset then."""
+    CCP = CarControllerParams
+    pitch = math.degrees(CC.orientationNED[1]) if len(CC.orientationNED) == 3 else 0.
+    past = pitch > CCP.EUCD_DOWNHILL_EXIT_PITCH if self.eucd_downhill else pitch < CCP.EUCD_DOWNHILL_ENTER_PITCH
+    self.eucd_downhill_frames = self.eucd_downhill_frames + 1 if past else 0
+    hold_time = CCP.EUCD_DOWNHILL_EXIT_TIME if self.eucd_downhill else CCP.EUCD_DOWNHILL_ENTER_TIME
+    if self.eucd_downhill_frames * DT_CTRL >= hold_time:
+      self.eucd_downhill = not self.eucd_downhill
+      self.eucd_downhill_frames = 0
+    CS.eucd_downhill = self.eucd_downhill
 
   def _eucd_relay_fsm0(self, CS, can_sends, ecm_engaged):
     """FSM0 relayed, never ACC enabled without the ECM engaged."""
@@ -482,10 +503,7 @@ class CarController(CarControllerBase):
     if self.eucd_cam_brake_honor:
       self.eucd_long_mode = LongMode.BRAKE
     else:
-      mode = eucd_next_long_mode(self.eucd_long_mode, accel, brake_offset)
-      if mode == LongMode.BRAKE and self._eucd_coast_tolerance(CC, CS, accel, brake_offset, self.eucd_long_mode == LongMode.BRAKE):
-        mode = LongMode.COAST
-      self.eucd_long_mode = mode
+      self.eucd_long_mode = eucd_next_long_mode(self.eucd_long_mode, accel, brake_offset)
     return accel, self.eucd_long_mode
 
   def _eucd_jerk_limit(self, accel, last_accel):
@@ -522,17 +540,6 @@ class CarController(CarControllerBase):
     if int(CS.eucd_stock_FSM3["ACC_Mode"]) == LongMode.BRAKE:
       return LongMode.BRAKE
     return long_mode
-
-  @staticmethod
-  def _eucd_coast_tolerance(CC, CS, accel, brake_offset, braking=False):
-    """Downhill band over the ACC set speed: coast up to set + tolerance, brake back to set."""
-    CCP = CarControllerParams
-    v, set_speed = CS.out.vEgo, CC.hudControl.setSpeed
-    lead_close = CS.eucd_acc_distance < 255 and CS.eucd_acc_distance < v * CCP.EUCD_COAST_TOLERANCE_LEAD_GAP
-    if brake_offset <= 0. or lead_close or accel <= CCP.EUCD_COAST_TOLERANCE_MAX_DECEL:
-      return False
-    top = set_speed if braking else set_speed + CCP.EUCD_COAST_TOLERANCE
-    return set_speed - CCP.EUCD_COAST_TOLERANCE_AT_SET < v < top
 
   @staticmethod
   def _eucd_slope_brake_offset(CC):

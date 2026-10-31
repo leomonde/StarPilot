@@ -275,3 +275,16 @@ def test_brake_req_ack_spoofs_ack(stock):
   dat = volvocan.create_eucd_cam_brake_request_ack(CANPacker(DBC), parse("BrakeReqAck", BRAKE_REQ_ACK_ADDR, 50, stock), False, True)[1]
   assert dat[5] == stock[5] & ~0x08  # 0xFF -> 0xF7
   assert dat[:5] == stock[:5] and dat[6:] == stock[6:]
+
+
+def test_resume_button_copies_the_cem_frame():
+  stock = bytes.fromhex("88108761a7ff0000")  # CEM's CCButtons, no button pressed (route 89e)
+  addr, dat, bus = volvocan.create_eucd_resume_button(CANPacker(DBC), parse("CCButtons", 0x127, 50, stock))
+  assert (addr, bus) == (0x127, 0)
+  pressed = parse("CCButtons", 0x127, 50, dat)
+  assert pressed["ACCResumeBtn"] == 1 and pressed["ACCResumeBtnInv"] == 0
+  # only the Resume bits differ from the CEM's frame: b7 bit5 set, its inverted copy b5 bit5 cleared
+  expected = bytearray(stock)
+  expected[5] &= ~0x20
+  expected[7] |= 0x20
+  assert dat == bytes(expected)

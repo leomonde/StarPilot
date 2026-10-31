@@ -585,6 +585,13 @@ def create_eucd_cam_button(packer, stock_ccbuttons, set_plus: bool):
   return packer.make_can_msg("CCButtons", CANBUS.cam, values)
 
 
+def create_eucd_resume_button(packer, stock_ccbuttons):
+  # CEM's CCButtons to the ECM with Resume pressed, the other bytes as the CEM's
+  values = _eucd_copy(stock_ccbuttons)
+  values |= {"ACCResumeBtn": 1, "ACCResumeBtnInv": 0}
+  return packer.make_can_msg("CCButtons", CANBUS.pt, values)
+
+
 def create_eucd_cam_engine_data(packer, stock_engine_data, show_standby: bool):
   # EngineData to the camera; show_standby: ECM engaged shown as standby (driver cancelled), as in route 881
   values = _eucd_copy(stock_engine_data)

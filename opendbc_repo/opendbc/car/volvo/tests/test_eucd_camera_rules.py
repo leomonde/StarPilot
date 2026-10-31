@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from opendbc.car import DT_CTRL
 from opendbc.car.volvo.carcontroller import CarController
 from opendbc.car.volvo.values import CarControllerParams, LongMode
 from opendbc.car.volvo import volvocan
@@ -98,33 +99,41 @@ def test_flat_unchanged():
   assert CarController._eucd_slope_brake_offset(SimpleNamespace(orientationNED=[])) == 0.
 
 
-KPH = 1 / 3.6
+def downhill_after(pitches_deg, start=False):
+  """Feeds one pitch per frame, returns the downhill state after each."""
+  cc = CarController.__new__(CarController)
+  cc.eucd_downhill, cc.eucd_downhill_frames = start, 0
+  CS = SimpleNamespace()
+  out = []
+  for p in pitches_deg:
+    cc._eucd_update_downhill(SimpleNamespace(orientationNED=[0., math.radians(p), 0.]), CS)
+    out.append(CS.eucd_downhill)
+  return out
 
 
-def tolerance(v_kph, set_kph=110., accel=-0.5, pitch_deg=-2., lead_m=255, braking=False):
-  CC = SimpleNamespace(hudControl=SimpleNamespace(setSpeed=set_kph * KPH))
-  CS = SimpleNamespace(out=SimpleNamespace(vEgo=v_kph * KPH), eucd_acc_distance=lead_m)
-  return CarController._eucd_coast_tolerance(CC, CS, accel, offset(pitch_deg), braking)
+def test_downhill_needs_2s_below_minus_2_deg():
+  n = int(2.0 / DT_CTRL)
+  assert not any(downhill_after([-3.] * (n - 1)))
+  assert downhill_after([-3.] * n)[-1]
+  # a short dip (hard braking) does not count
+  assert not any(downhill_after(([-3.] * (n // 2) + [0.]) * 3))
+  assert not any(downhill_after([-1.5] * (3 * n)))  # between the thresholds
 
 
-def test_coast_tolerance_downhill_over_set():
-  assert tolerance(110.5)
-  assert tolerance(114.)
-  assert not tolerance(115.5)          # above set + 5: brakes
-  assert not tolerance(90.)  # held below the set: no tolerance
-  assert not tolerance(112., pitch_deg=0.)   # flat
-  assert tolerance(112., accel=-1.2)         # overspeed request still coasts
-  assert not tolerance(112., accel=-1.6)     # strong request
-  assert not tolerance(112., lead_m=40)  # camera target closer than 2.5 s
-  assert tolerance(112., lead_m=120)
+def test_downhill_ends_after_1s_above_minus_1_deg():
+  n = int(1.0 / DT_CTRL)
+  assert all(downhill_after([-1.5] * (5 * n), start=True))  # still downhill between the thresholds
+  states = downhill_after([0.] * n, start=True)
+  assert all(states[:-1]) and not states[-1]
 
 
-def test_coast_tolerance_brakes_back_to_set():
-  # Braking from set + 5 continues until the set, then coasts
-  assert not tolerance(113., braking=True)
-  assert not tolerance(110.5, braking=True)
-  assert tolerance(109.8, braking=True)
-  assert not tolerance(108., braking=True)  # well below the set: normal logic
+def test_no_pitch_is_flat():
+  cc = CarController.__new__(CarController)
+  cc.eucd_downhill, cc.eucd_downhill_frames = False, 0
+  CS = SimpleNamespace()
+  for _ in range(500):
+    cc._eucd_update_downhill(SimpleNamespace(orientationNED=[]), CS)
+  assert not CS.eucd_downhill
 
 
 def limited(accel, last):

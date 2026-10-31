@@ -64,6 +64,7 @@ class CarState(CarStateBase):
     # Set by the carcontroller: OP's stop to 0 owns the ACC standstill
     self.eucd_full_stop_active = False
     self.eucd_full_stop_standstill = False
+    self.eucd_downhill = False  # set by the carcontroller
     self.eucd_ecm_standstill_ready = False
 
   def update(self, can_parsers, starpilot_toggles) -> structs.CarState:
@@ -250,7 +251,9 @@ class CarState(CarStateBase):
     ret.steeringPressed = abs(ret.steeringTorque) > 50
 
     # cruise state
-    ret.cruiseState.speed = pt_cp.vl["ACC_Speed"]["ACC_Speed"] * CV.KPH_TO_MS
+    set_speed = pt_cp.vl["ACC_Speed"]["ACC_Speed"] * CV.KPH_TO_MS
+    # Downhill (from the carcontroller): the planner targets a bit over the set, so OP holds it without fighting it
+    ret.cruiseState.speed = set_speed + (CarControllerParams.EUCD_DOWNHILL_SET_OFFSET if self.eucd_downhill else 0.)
     ret.cruiseState.speedCluster = ret.cruiseState.speed
     ret.cruiseState.available = bool(cam_cp.vl["FSM0"]["ACC_Available"])
     # ECM is the ACC master
@@ -301,7 +304,7 @@ class CarState(CarStateBase):
     ret.rightBlinker = pt_cp.vl["MiscCarInfo"]["TurnSignal"] == 3
 
     # One accelCruise/decelCruise per frame from the pending delta
-    cruise_kph_now = round(ret.cruiseState.speed * CV.MS_TO_KPH)
+    cruise_kph_now = round(set_speed * CV.MS_TO_KPH)  # the driver's set, not the downhill offset
     if ret.cruiseState.enabled and self.eucd_cruise_enabled_prev:
       self._eucd_pending_delta += cruise_kph_now - self._eucd_cruise_speed_prev_kph
     self._eucd_cruise_speed_prev_kph = cruise_kph_now

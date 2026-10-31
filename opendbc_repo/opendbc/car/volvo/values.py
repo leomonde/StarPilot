@@ -97,7 +97,9 @@ class CarControllerParams:
   EUCD_STEER_TIMEOUT = 30 / DT_CTRL  # frames of 0 torque before the EPS faults
   EUCD_BLOCK_LEN = 8   # frames to block steering on a direction change
   EUCD_DEADZONE = 0.2  # deg, keep the previous direction inside it
-  EUCD_BUTTON_BURST = 15  # frames per button press
+  # Resume to the ECM held this long, on copies of the CEM's own CCButtons: its frames without Resume landed amid a
+  # one-shot burst and the ECM ignored it (route 89e, 580.5 s)
+  EUCD_RESUME_HOLD_FRAMES = int(0.3 / DT_CTRL)
   EUCD_SNG_OP_RESUME_TIME = 0.2  # s of openpilot resume before SNG (0.5 delayed the drive-off, route 89d)
   EUCD_MIN_STEER_SPEED = 0.1  # m/s, no steering nor cancel button below this
 
@@ -162,10 +164,13 @@ class CarControllerParams:
   # Extra uphill margin before BRAKE
   EUCD_UPHILL_BRAKE_ENTER_EXTRA = 0.6  # fraction of the uphill offset
   # Downhill coast tolerance over the ACC set speed
-  EUCD_COAST_TOLERANCE = 5. * CV.KPH_TO_MS  # brakes from set + this, releases at set
-  EUCD_COAST_TOLERANCE_MAX_DECEL = -1.5  # m/s^2, stronger requests brake
-  EUCD_COAST_TOLERANCE_LEAD_GAP = 2.5  # s, no tolerance with a closer camera target
-  EUCD_COAST_TOLERANCE_AT_SET = 1. * CV.KPH_TO_MS  # below the set, still counted as at set
+  # Downhill: the planner targets the set speed + this (carstate reports it), so OP holds it with light braking. The
+  # old coast band let the car run over the set against the planner, whose integrator then braked hard (routes 89f, 8a1)
+  EUCD_DOWNHILL_SET_OFFSET = 5. * CV.KPH_TO_MS
+  EUCD_DOWNHILL_ENTER_PITCH = -2.  # deg, downhill below this for EUCD_DOWNHILL_ENTER_TIME
+  EUCD_DOWNHILL_EXIT_PITCH = -1.  # deg, back to the set above this for EUCD_DOWNHILL_EXIT_TIME
+  EUCD_DOWNHILL_ENTER_TIME = 2.0  # s
+  EUCD_DOWNHILL_EXIT_TIME = 1.0  # s
 
   # Accel request ramps (jerk limits)
   EUCD_JERK_UP = 2.0  # m/s^3, rising
