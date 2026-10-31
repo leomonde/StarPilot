@@ -101,10 +101,6 @@ class CarControllerParams:
   EUCD_SNG_OP_RESUME_TIME = 0.2  # s of openpilot resume before SNG (0.5 delayed the drive-off, route 89d)
   EUCD_MIN_STEER_SPEED = 0.1  # m/s, no steering nor cancel button below this
 
-  # Simulated red light (test): start/stop turned off = red, back on = green (edges only, route 87f)
-  EUCD_SIM_RED_LIGHT = True
-  EUCD_SIM_RED_LIGHT_DEBOUNCE_FRAMES = int(0.2 / DT_CTRL)  # start/stop state held this long
-
   # OP's stop to 0, replaying the camera's own stop (route 807). As the Ford/Toyota ports, the planner decides (lead,
   # red light, stop sign, obstacle) and the port follows accel, stopping and cruiseControl.resume: below the enter
   # speed, braking, OP owns the ECM with the camera's last clean FSM0/FSM3/FSM4 and the camera is shown ACC standby.
