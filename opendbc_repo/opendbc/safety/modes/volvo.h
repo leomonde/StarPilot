@@ -50,6 +50,12 @@ typedef struct {
 static VolvoCamFrames volvo_eucd_cam_fsm3;
 static VolvoCamFrames volvo_eucd_cam_fsm4;
 
+// OP owns the ECM in its stop (it shows the camera ACC standby while the ECM is engaged): the camera's FSM1/FSM3 stay
+// off the ECM also with the driver on the gas, so the ECM stays engaged and drives off on the gas. Fresh while OP keeps
+// showing that standby, counted down per ECM frame: the camera's frames are forwarded again a few frames after it stops
+#define VOLVO_EUCD_OP_OWNS_ECM_FRAMES 3
+static int volvo_eucd_op_owns_ecm_fresh = 0;
+
 static void volvo_cam_frames_clear(VolvoCamFrames *frames) {
   frames->index = 0U;
   for (uint8_t i = 0U; i < VOLVO_EUCD_CAM_FRAMES; i++) {
@@ -112,6 +118,9 @@ static void volvo_eucd_rx_hook(const CANPacket_t *msg) {
       // Signal: ACC_State_ECM (byte 4 bits 5:4: 1 off, 2 standby, 3 engaged)
       bool cruise_engaged = ((GET_BYTES(msg, 4, 1) >> 4) & 0x3U) == 0x3U;
       pcm_cruise_check(cruise_engaged);
+      if (volvo_eucd_op_owns_ecm_fresh > 0) {
+        volvo_eucd_op_owns_ecm_fresh--;
+      }
     }
   } else {
     // no other bus is monitored
@@ -188,6 +197,14 @@ static bool volvo_eucd_tx_hook(const CANPacket_t *msg) {
     }
   }
 
+  // EngineData to the camera showing ACC standby with the ECM engaged: OP's stop, it sends the ECM's FSM1/FSM3
+  if ((addr == VOLVO_EUCD_EngineData) && (msg->bus == VOLVO_PARTY_BUS)) {
+    const bool shows_standby = ((GET_BYTES(msg, 4, 1) >> 4) & 0x3U) == 0x2U;
+    if (shows_standby && cruise_engaged_prev && controls_allowed) {
+      volvo_eucd_op_owns_ecm_fresh = VOLVO_EUCD_OP_OWNS_ECM_FRAMES;
+    }
+  }
+
   // Longitudinal control: gate on controls_allowed + range check.
   // check_relay=false lets stock FSM3 flow cam->main; OP overlays only when long-active.
   if (addr == VOLVO_EUCD_FSM3) {
@@ -224,8 +241,10 @@ static bool volvo_eucd_tx_hook(const CANPacket_t *msg) {
 
 static bool volvo_eucd_fwd_hook(int bus_num, int addr) {
   bool block_msg = false;
-  // camera FSM1/FSM3 blocked while OP controls (OP sends them)
-  if (((unsigned int)bus_num == VOLVO_PARTY_BUS) && controls_allowed && !gas_pressed) {
+  // camera FSM1/FSM3 blocked while OP controls (OP sends them). On the gas the camera's go to the ECM (gas has
+  // priority), except in OP's stop: OP's FSM3 then carries no accel (long not allowed), the driver's pedal drives
+  const bool op_owns_ecm = volvo_eucd_op_owns_ecm_fresh > 0;
+  if (((unsigned int)bus_num == VOLVO_PARTY_BUS) && controls_allowed && (!gas_pressed || op_owns_ecm)) {
     if (((unsigned int)addr == VOLVO_EUCD_FSM1) || ((unsigned int)addr == VOLVO_EUCD_FSM3)) {
       block_msg = true;
     }
@@ -240,6 +259,7 @@ static bool volvo_eucd_fwd_hook(int bus_num, int addr) {
 static safety_config volvo_eucd_init(void) {
   volvo_cam_frames_clear(&volvo_eucd_cam_fsm3);
   volvo_cam_frames_clear(&volvo_eucd_cam_fsm4);
+  volvo_eucd_op_owns_ecm_fresh = 0;
   static const CanMsg VOLVO_EUCD_TX_MSGS[] = {
     {VOLVO_EUCD_CCButtons, VOLVO_MAIN_BUS,  8, .check_relay = false},
     // relayed by OP with Set to re-engage the camera's ACC; check_relay so the CEM's frame does not pass along with it

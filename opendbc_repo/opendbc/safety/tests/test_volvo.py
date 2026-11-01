@@ -694,6 +694,47 @@ class TestVolvoEUCD(common.CarSafetyTest, common.AngleSteeringSafetyTest):
           expected = -1 if should_block else VOLVO_MAIN_BUS
           self.assertEqual(expected, result, f"{addr=:#x} {controls_allowed=} {gas_pressed=}")
 
+  def test_gas_in_op_stop_keeps_camera_fsm_off_the_ecm(self):
+    # In OP's stop (camera shown ACC standby, ECM engaged) the camera's FSM1/FSM3 stay off the ECM also on the gas,
+    # so the ECM stays engaged and the driver drives off on the pedal; OP's FSM3 carries no accel meanwhile
+    def forwarded():
+      return {addr: self.safety.safety_fwd_hook(VOLVO_PARTY_BUS, addr) == VOLVO_MAIN_BUS for addr in (0x260, 0x270)}
+    standby_view = self.packer.make_can_msg_safety("EngineData", VOLVO_PARTY_BUS, {"ACC_State_ECM": 2})
+    engaged_view = self.packer.make_can_msg_safety("EngineData", VOLVO_PARTY_BUS, {"ACC_State_ECM": 3})
+    self.safety.set_controls_allowed(True)
+    self._rx(self._pcm_status_msg(True))
+    self._rx(self._user_gas_msg(True))
+    self.assertEqual({0x260: True, 0x270: True}, forwarded())  # driver's gas: the camera's frames to the ECM
+    self.assertTrue(self._tx(engaged_view))
+    self.assertEqual({0x260: True, 0x270: True}, forwarded())  # the camera sees the ECM: not OP's stop
+    self.assertTrue(self._tx(standby_view))
+    self.assertEqual({0x260: False, 0x270: False}, forwarded())
+    self.assertTrue(self._tx(self._longitudinal_cmd_msg(0.0)))
+    self.assertFalse(self._tx(self._longitudinal_cmd_msg(1.0)))
+    self.assertFalse(self._tx(self._longitudinal_cmd_msg(-1.0)))
+    # kept a few ECM frames after OP stops showing standby, then the camera's frames again
+    for _ in range(2):
+      self._rx(self._pcm_status_msg(True))
+    self.assertEqual({0x260: False, 0x270: False}, forwarded())
+    self._rx(self._pcm_status_msg(True))
+    self.assertEqual({0x260: True, 0x270: True}, forwarded())
+    # standby shown without the ECM engaged, or without controls allowed: not OP's stop
+    self._rx(self._pcm_status_msg(False))
+    self.safety.set_controls_allowed(True)
+    self.assertTrue(self._tx(standby_view))
+    self.assertEqual({0x260: True, 0x270: True}, forwarded())
+    self._rx(self._pcm_status_msg(True))
+    self.safety.set_controls_allowed(False)
+    self.assertTrue(self._tx(standby_view))
+    self.safety.set_controls_allowed(True)
+    self.assertEqual({0x260: True, 0x270: True}, forwarded())
+    # a new safety mode starts without it
+    self.assertTrue(self._tx(standby_view))
+    self.safety.set_safety_hooks(SAFETY_VOLVO, VOLVO_FLAG_EUCD)
+    self.safety.set_controls_allowed(True)
+    self._rx(self._user_gas_msg(True))
+    self.assertEqual({0x260: True, 0x270: True}, forwarded())
+
   # Volvo gates the angle command on engagement, not on the LKASteerDirection flag (which
   # drops to NONE mid-control during the anti-windup pause), and uses inactive_angle_is_zero:
   # while engaged the rate-limited angle is allowed, while disengaged only a zero angle passes.

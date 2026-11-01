@@ -393,7 +393,8 @@ class CarController(CarControllerBase):
       # In OP's stop only the planner's resume drives off (cruiseControl.resume, as Ford/Toyota): the camera's distance
       # jitter drove off while OP still asked to stop (route 884, 30.9 s)
       lead_moved = CS.eucd_acc_distance > self.eucd_distance and not self.eucd_full_stop.active
-      if at_standstill and self.eucd_waiting and (lead_moved or op_resume) and self.eucd_full_stop.drive_off_ready(CS):
+      drive_off = lead_moved or op_resume or self.eucd_full_stop.driver_gas
+      if at_standstill and self.eucd_waiting and drive_off and self.eucd_full_stop.drive_off_ready(CS):
         self.eucd_resume_hold_frames = CCP.EUCD_RESUME_HOLD_FRAMES
         if self.eucd_sng_count == 0:
           self.eucd_sng_ack_frames = 25
@@ -444,7 +445,13 @@ class CarController(CarControllerBase):
     """Accel and mode, FSM1/FSM3 at 50 Hz."""
     if CS.eucd_stock_FSM4_frames:
       self.eucd_cam_brake = bool(CS.eucd_stock_FSM4_frames[-1]["ACC_BrakeRequest"])
-    if CC.longActive:
+    if self.eucd_full_stop.driver_gas:
+      # The ECM drives on the driver's gas: no accel nor brake from OP from the first frame the panda sees the pedal
+      # (its inactive accel; OP's long goes off a frame later), the template's mode is stale
+      accel, long_mode = 0., LongMode.COAST
+      self.eucd_long_mode = LongMode.COAST
+      self.eucd_cam_brake_honor = False
+    elif CC.longActive:
       accel, long_mode = self._eucd_long_decision(CC, CS)
     else:
       accel = float(CS.eucd_stock_FSM3["ACC_AccelerationRequest"])

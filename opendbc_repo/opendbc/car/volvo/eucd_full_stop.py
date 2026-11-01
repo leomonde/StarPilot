@@ -30,6 +30,7 @@ class EucdFullStop:
     self.car_hold_frames = 0
     self.stopping = False  # FSM4 b1 F9
     self.holding = False  # the car holds the stop: brake request released
+    self.driver_gas = False  # driver on the gas in the stop: OP's long off, the ECM kept engaged and driven off
     self.standstill = False  # FSM3 ACC_Standstill to the ECM, and the cruise standstill carstate reports
     self.driving_off = False  # resume sent, standstill released
     self.drive_off_request = False  # set with the resume burst, taken on the next frame
@@ -65,14 +66,17 @@ class EucdFullStop:
 
     v = CS.out.vEgo
     have_templates = self.tpl_fsm0 and len(self.tpl_fsm3) == 2 and self.tpl_fsm4 is not None
-    # Ended by the driver (brake, gas, cancel) with the ECM still engaged: the ECM gets the camera's frames (standby)
-    # and drops, the camera keeps seeing standby until then, never the ECM engaged from standby, which aborted it 0x10
-    # for good (route 896). The gas ends it on purpose: the panda gives the ECM the camera's FSM3 while it is pressed
-    # (gas has priority), so the ACC goes to standby and the driver re-engages it later (route 898, 357.7 s)
+    # The driver's gas turns OP's long off but not the stop: the panda keeps the camera's FSM3 off the ECM while OP
+    # shows the camera standby, OP's frames carry no accel nor brake, so the ECM stays engaged and drives off on the
+    # pedal (before, the camera's frames reached it and the ACC went to standby: route 898, 357.7 s)
+    self.driver_gas = self.active and CC.enabled and CS.out.gasPressed
+    # Ended by the driver (brake, cancel) with the ECM still engaged: the ECM gets the camera's frames (standby) and
+    # drops, the camera keeps seeing standby until then, never the ECM engaged from standby, which aborted it 0x10 for
+    # good (route 896)
     if self.exit_standby_frames > 0:
       done = not CS.eucd_ecm_acc_engaged or self.exit_standby_frames * DT_CTRL >= CCP.EUCD_FULL_STOP_EXIT_STANDBY_MAX
       self.exit_standby_frames = 0 if (done or self.active) else self.exit_standby_frames + 1
-    if not CC.longActive:
+    if not (CC.longActive or self.driver_gas):
       if self.cam_standby and CS.eucd_ecm_acc_engaged:
         self.exit_standby_frames = 1
       self.reset()
@@ -95,6 +99,8 @@ class EucdFullStop:
     standstill = CS.out.standstill
     self.stopped_frames = self.stopped_frames + 1 if standstill else 0
 
+    # The driver's gas drives off as OP's resume does
+    self.drive_off_request |= self.driver_gas and not self.driving_off
     if self.drive_off_request:
       self.driving_off, self.drive_off_frames, self.drive_off_moved = True, 0, False
     if self.driving_off:
@@ -117,8 +123,9 @@ class EucdFullStop:
     self.car_hold_frames = self.car_hold_frames + 1 if (stopping and standstill and CS.eucd_car_hold) else 0
     self.stopping = stopping
     # Held until OP asks to drive after the resume, so no brake pulse at the start
-    self.holding = (self.car_hold_frames > CCP.EUCD_HOLD_RELEASE_FRAMES or
-                    (self.holding and self.driving_off and standstill and CC.actuators.accel <= 0.))
+    self.holding = not self.driver_gas and (
+      self.car_hold_frames > CCP.EUCD_HOLD_RELEASE_FRAMES or
+      (self.holding and self.driving_off and standstill and CC.actuators.accel <= 0.))
     self.standstill = stopping and self.stopped_frames * DT_CTRL >= CCP.EUCD_STANDSTILL_DELAY
 
   def _resync_camera(self, cancelled):
@@ -144,7 +151,7 @@ class EucdFullStop:
 
   def reset(self):
     self.active = self.driving_off = False
-    self.standstill = self.stopping = self.holding = False
+    self.standstill = self.stopping = self.holding = self.driver_gas = False
     self.stopped_frames = self.car_hold_frames = 0
     self.cam_standby = False
     self.resync_frames = self.resync_attempts = self.cam_clean_frames = 0
@@ -184,8 +191,8 @@ class EucdFullStop:
     fsm4 = {**self.tpl_fsm4, "Byte_0": stock_fsm4["Byte_0"], "ACC_BrakeRequest": 0}
     # b1 F1 -> F9: stopping
     fsm4["ACC_Stopping"] = int(self.stopping)
-    if self.holding:
-      # The car holds: brake request released, like the camera 50 ms after the hold
+    if self.holding or self.driver_gas:
+      # The car holds (or the driver's gas): brake request released, like the camera 50 ms after the hold
       fsm4 |= {"Byte_5_b7": 1, "ACC_BrakeRequest": 0, "ACC_BrakeTarget": eucd_fsm4_brake_value(0., False) & 0x3FFF}
       return fsm4, False
     return fsm4, True
