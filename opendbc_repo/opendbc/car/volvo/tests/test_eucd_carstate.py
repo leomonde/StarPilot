@@ -57,16 +57,16 @@ def test_tsr_speed_limit(car, tsr_kph):
 
 
 @pytest.mark.parametrize("gear, speed_kph, expected", [
-  (44, 0, GearShifter.reverse),
-  (44, 8, GearShifter.reverse),
-  (44, 15, GearShifter.drive),  # 44 is only trusted below 3 m/s
-  (50, 0, GearShifter.drive),
-  (164, 40, GearShifter.drive),
+  (0, 0, GearShifter.park),
+  (1, 0, GearShifter.reverse),
+  (1, 8, GearShifter.reverse),
+  (2, 0, GearShifter.neutral),
+  (3, 40, GearShifter.drive),
 ])
-def test_reverse_gear(car, gear, speed_kph, expected):
+def test_gear_lever(car, gear, speed_kph, expected):
   cs, parsers = car
   packer = CANPacker(DBC[CAR.VOLVO_V60][Bus.pt])
-  msgs = [packer.make_can_msg("Gear_Info", 0, {"Gear": gear}),
+  msgs = [packer.make_can_msg("GearSelector", 0, {"GearLever": gear}),
           packer.make_can_msg("VehicleSpeed1", 0, {"VehicleSpeed": speed_kph})]
   for parser in parsers.values():
     parser.update([(1_000_000, [CanData(*m) for m in msgs])])

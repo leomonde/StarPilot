@@ -59,6 +59,12 @@ BO_ 81 FSM0: 8 FSM
  SG_ Byte_6 : 55|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_7 : 63|8@0+ (1,0) [0|255] "" XXX
 
+BO_ 99 GearSelector: 8 XXX
+ SG_ GearLever : 54|2@0+ (1,0) [0|3] "" XXX
+
+BO_ 112 ButtonPanel: 8 XXX
+ SG_ Console_Button_Pressed : 18|1@0+ (1,0) [0|1] "" XXX
+
 BO_ 277 NEW_MSG_7: 8 XXX
  SG_ NEW_SIGNAL_1 : 39|16@0+ (1,0) [0|65535] "" XXX
 
@@ -77,7 +83,9 @@ BO_ 295 CCButtons: 8 CEM
  SG_ ACCSetBtn : 63|1@0+ (1,0) [0|1] "" XXX
  SG_ Byte_0 : 7|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_1 : 15|8@0+ (1,0) [0|255] "" XXX
- SG_ Byte_2 : 23|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_2_b7_3 : 23|5@0+ (1,0) [0|31] "" XXX
+ SG_ LKA_State : 18|1@0+ (1,0) [0|1] "" XXX
+ SG_ Byte_2_b1_0 : 17|2@0+ (1,0) [0|3] "" XXX
  SG_ Byte_3 : 31|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_4_b7_3 : 39|5@0+ (1,0) [0|31] "" XXX
  SG_ Byte_5_b6 : 46|1@0+ (1,0) [0|1] "" XXX
@@ -138,7 +146,7 @@ BO_ 384 Accessories_02: 8 XXX
 BO_ 465 Gear_Info: 8 XXX
  SG_ BrakePressedInv : 3|1@0+ (1,0) [0|1] "" XXX
  SG_ NEW_SIGNAL_1 : 55|16@0+ (1,0) [0|4095] "" XXX
- SG_ Gear : 31|8@0+ (1,0) [0|255] "" XXX
+ SG_ Gear_Engaged : 31|8@0+ (1,0) [0|255] "" XXX
 
 BO_ 511 BrakeHold: 8 XXX
  SG_ Byte_0 : 7|8@0+ (1,0) [0|255] "" XXX
@@ -219,6 +227,7 @@ BO_ 610 FSM2: 8 FSM
 
 BO_ 612 Accessories_03: 8 XXX
  SG_ Park_Assist_Button : 60|1@0+ (1,0) [0|1] "" XXX
+ SG_ RearParkWarning_Button : 58|1@0+ (1,0) [0|1] "" XXX
 
 BO_ 624 FSM3: 8 FSM
  SG_ ACC_Standstill : 0|1@0+ (1,0) [0|1] "" XXX
@@ -269,6 +278,12 @@ BO_ 665 BrakeReqAck: 8 XXX
  SG_ Byte_5_b2_0 : 42|3@0+ (1,0) [0|7] "" XXX
  SG_ Byte_6 : 55|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_7 : 63|8@0+ (1,0) [0|255] "" XXX
+
+BO_ 706 RearParkWarning_Status: 8 XXX
+ SG_ RearParkWarning_State : 35|1@0+ (1,0) [0|1] "" XXX
+
+BO_ 807 ParkAssist_Status: 8 XXX
+ SG_ Park_Assist_Off : 40|1@0+ (1,0) [0|1] "" XXX
 
 BO_ 802 StartStop: 8 XXX
  SG_ StartStop : 8|1@0+ (1,0) [0|1] "" XXX
@@ -386,6 +401,7 @@ BO_ 2015 diagGlobalReq: 8 XXX
  SG_ byte6 : 55|8@0+ (1,0) [0|255] "" XXX
  SG_ byte7 : 63|8@0+ (1,0) [0|255] "" XXX
 
+CM_ SG_ 112 Console_Button_Pressed "Any console button (LKA, rear park warning, park assist, start/stop)";
 CM_ SG_ 81 ACC_AbortCode "0x10 generic abort, 0x04 latched fault";
 CM_ SG_ 608 ACC_Braking "Set while ACC brakes";
 CM_ SG_ 624 ACC_NoTargetCancel "Camera cancels: slow with no target";
@@ -431,3 +447,5 @@ CM_ SG_ 648 Counter "counts 0 to 6";
 CM_ SG_ 1021 TSR_Speed "Traffic Sign Recognition speed";
 CM_ SG_ 1039 TurnSignal "0 = Nothing, 1= Left, 3=Right";
 VAL_ 522 BrakePedal 1 "Not Pressed" 2 "Pressed";
+VAL_ 99 GearLever 0 "P" 1 "R" 2 "N" 3 "D";
+VAL_ 465 Gear_Engaged 50 "None (P/N)" 216 "Forward" 44 "Reverse";

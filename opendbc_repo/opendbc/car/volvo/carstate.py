@@ -288,11 +288,13 @@ class CarState(CarStateBase):
 
     self.eucd_cruise_enabled_prev = ret.cruiseState.enabled
 
-    # Gear: reverse decoded, else drive
-    if pt_cp.vl["Gear_Info"]["Gear"] == 44 and ret.vEgo < 3:
-      ret.gearShifter = GearShifter.reverse
-    else:
-      ret.gearShifter = GearShifter.drive
+    # Gear lever position (route 8a6)
+    ret.gearShifter = {
+      0: GearShifter.park,
+      1: GearShifter.reverse,
+      2: GearShifter.neutral,
+      3: GearShifter.drive,
+    }[int(pt_cp.vl["GearSelector"]["GearLever"])]
 
     # safety
     ret.stockFcw = False
@@ -382,7 +384,7 @@ class CarState(CarStateBase):
         ("SAS0", 100),
         ("EngineData", 66),
         ("CCButtons", 66),
-        ("Gear_Info", 50),
+        ("GearSelector", 66),
         ("BrakeLevel", 50),
         ("BrakeStatus", 25),
         ("wheelspeed1", 50),
