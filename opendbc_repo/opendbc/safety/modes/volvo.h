@@ -98,6 +98,11 @@ static void volvo_eucd_rx_hook(const CANPacket_t *msg) {
       gas_pressed = gas_raw >= 100U;
     }
 
+    if (addr == VOLVO_EUCD_CCButtons) {
+      // Signal: LKA_State, the driver's LKA on/off (always on lateral)
+      lkas_on = GET_BIT(msg, 18U);
+    }
+
     if (addr == VOLVO_EUCD_Brake_Info) {
       // Signal: BrakePedal
       brake_pressed = ((GET_BYTES(msg, 2, 1) & 0x0CU) >> 2U) == 2U;
@@ -188,7 +193,7 @@ static bool volvo_eucd_tx_hook(const CANPacket_t *msg) {
 
     // Gate on angle command, not LKASteerDirection: EUCD needs ~8-frame NONE pause on
     // direction change while OP still emits a tracking angle — gating direction would stall lat.
-    if (steer_angle_cmd_checks(desired_angle, controls_allowed, VOLVO_EUCD_STEERING_LIMITS)) {
+    if (steer_angle_cmd_checks(desired_angle, controls_allowed || aol_allowed, VOLVO_EUCD_STEERING_LIMITS)) {
       violation = true;
     }
   }
@@ -281,6 +286,7 @@ static safety_config volvo_eucd_init(void) {
     {.msg = {{VOLVO_EUCD_AccPedal,      VOLVO_MAIN_BUS,  8, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true, .frequency = 100U}, { 0 }, { 0 }}},
     {.msg = {{VOLVO_EUCD_FSM0,          VOLVO_PARTY_BUS, 8, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true, .frequency = 100U}, { 0 }, { 0 }}},
     {.msg = {{VOLVO_EUCD_EngineData,    VOLVO_MAIN_BUS,  8, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true, .frequency = 67U}, { 0 }, { 0 }}},
+    {.msg = {{VOLVO_EUCD_CCButtons,     VOLVO_MAIN_BUS,  8, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true, .frequency = 66U}, { 0 }, { 0 }}},
     {.msg = {{VOLVO_EUCD_VehicleSpeed1, VOLVO_MAIN_BUS,  8, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true, .frequency = 50U}, { 0 }, { 0 }}},
     {.msg = {{VOLVO_EUCD_Brake_Info,    VOLVO_MAIN_BUS,  8, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true, .frequency = 50U}, { 0 }, { 0 }}},
     {.msg = {{VOLVO_EUCD_PSCM1,         VOLVO_MAIN_BUS,  8, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true, .frequency = 50U}, { 0 }, { 0 }}},  // steering angle meas

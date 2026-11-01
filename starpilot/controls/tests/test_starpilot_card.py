@@ -611,29 +611,23 @@ def test_hyundai_lkas_button_can_start_aol_before_normal_engagement(monkeypatch,
   assert ret.pauseLateral is False
 
 
-def test_volvo_aol_stays_disabled_even_with_stale_enabled_toggle(monkeypatch, tmp_path):
+def test_volvo_aol_follows_the_car_lka_state(monkeypatch, tmp_path):
   monkeypatch.setattr(spc, "Params", FakeParams)
   monkeypatch.setattr(spc, "ERROR_LOGS_PATH", tmp_path)
 
   card = spc.StarPilotCard(
-    SimpleNamespace(brand="volvo"),
+    SimpleNamespace(brand="volvo", carFingerprint="VOLVO_V60"),
     SimpleNamespace(alternativeExperience=spc.ALTERNATIVE_EXPERIENCE.ALWAYS_ON_LATERAL),
   )
-  car_state = make_car_state(available=True, enabled=True)
-  starpilot_car_state = SimpleNamespace(distancePressed=False)
+  car_state = make_car_state(available=False, enabled=False)  # LKA works without the ACC
   sm = make_sm()
-  toggles = make_toggles(
-    always_on_lateral=True,
-    always_on_lateral_main=True,
-    always_on_lateral_lkas=True,
-    lkas_allowed_for_aol=True,
-    main_cruise_aol_toggle=True,
-  )
+  toggles = make_toggles(always_on_lateral=True, always_on_lateral_main=True)
 
-  ret = card.update(car_state, starpilot_car_state, sm, toggles)
-
-  assert ret.alwaysOnLateralAllowed is False
-  assert ret.alwaysOnLateralEnabled is False
+  for lka_on in (True, False, True):
+    starpilot_car_state = SimpleNamespace(distancePressed=False, alwaysOnLateralAllowed=lka_on)
+    ret = card.update(car_state, starpilot_car_state, sm, toggles)
+    assert ret.alwaysOnLateralAllowed is lka_on
+    assert ret.alwaysOnLateralEnabled is lka_on
 
 
 def test_sonata_hybrid_lkas_button_can_start_aol_before_normal_engagement(monkeypatch, tmp_path):

@@ -350,6 +350,8 @@ class CarState(CarStateBase):
     # TSR speed limit, 0 = no sign
     tsr_kph = cam_cp.vl["FSM5"]["TSR_Speed"]
     fp_ret.dashboardSpeedLimit = tsr_kph * CV.KPH_TO_MS if tsr_kph > 0 else 0.0
+    # Always on lateral follows the driver's LKA on/off, as the panda's
+    fp_ret.alwaysOnLateralAllowed = bool(pt_cp.vl["CCButtons"]["LKA_State"])
     return ret, fp_ret
 
   @staticmethod

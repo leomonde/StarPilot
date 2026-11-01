@@ -567,6 +567,10 @@ class TestVolvoEUCD(common.CarSafetyTest, common.AngleSteeringSafetyTest):
     values = {"ACC_State_ECM": 3 if enable else 2}  # engaged / standby
     return self.packer.make_can_msg_safety("EngineData", VOLVO_MAIN_BUS, values)
 
+  def _toggle_aol(self, toggle_on):
+    # always on lateral follows the driver's LKA on/off
+    return self.packer.make_can_msg_safety("CCButtons", VOLVO_MAIN_BUS, {"LKA_State": 1 if toggle_on else 0, "ACCOnOffBtnInv": 1, "ACCResumeBtnInv": 1})
+
   def _fsm0_msg(self, acc_enabled: bool):
     values = {"ACC_Enabled": 1 if acc_enabled else 0, "ACC_Available": 1}
     return self.packer.make_can_msg_safety("FSM0", VOLVO_MAIN_BUS, values)

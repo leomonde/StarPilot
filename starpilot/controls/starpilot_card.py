@@ -536,6 +536,9 @@ class StarPilotCard:
     if self.ev6_aol_needs_arming and not ev6_aol_authorized:
       self.always_on_lateral_allowed = False
 
+    if getattr(self.CP, "carFingerprint", None) == "VOLVO_V60":
+      # Volvo V60: always on lateral is the car's LKA on/off (independent of the ACC), as the panda's
+      self.always_on_lateral_allowed = bool(getattr(starpilotCarState, "alwaysOnLateralAllowed", False))
     self.always_on_lateral_enabled = self.always_on_lateral_allowed and self.always_on_lateral_set
     if getattr(self.CP, "carFingerprint", None) == "TESLA_MODEL_S_PREAP":
       self.always_on_lateral_enabled &= preap_authorized
