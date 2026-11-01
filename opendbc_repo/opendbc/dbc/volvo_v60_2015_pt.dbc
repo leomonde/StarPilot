@@ -146,7 +146,7 @@ BO_ 384 Accessories_02: 8 XXX
 BO_ 465 Gear_Info: 8 XXX
  SG_ BrakePressedInv : 3|1@0+ (1,0) [0|1] "" XXX
  SG_ NEW_SIGNAL_1 : 55|16@0+ (1,0) [0|4095] "" XXX
- SG_ Gear_Engaged : 31|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_3 : 31|8@0+ (1,0) [0|255] "" XXX
 
 BO_ 511 BrakeHold: 8 XXX
  SG_ Byte_0 : 7|8@0+ (1,0) [0|255] "" XXX
@@ -448,4 +448,3 @@ CM_ SG_ 1021 TSR_Speed "Traffic Sign Recognition speed";
 CM_ SG_ 1039 TurnSignal "0 = Nothing, 1= Left, 3=Right";
 VAL_ 522 BrakePedal 1 "Not Pressed" 2 "Pressed";
 VAL_ 99 GearLever 0 "P" 1 "R" 2 "N" 3 "D";
-VAL_ 465 Gear_Engaged 50 "None (P/N)" 216 "Forward" 44 "Reverse";
