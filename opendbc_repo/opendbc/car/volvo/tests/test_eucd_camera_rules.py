@@ -192,21 +192,21 @@ def test_fsm3_template_never_keeps_the_camera_ack():
   assert cam_fsm3["ACC_Check"] == 1  # the camera's frame untouched
 
 
-def stopped_full_stop():
+def stopped_full_stop(seconds=3.):
   """OP's stop at standstill, the car holding."""
   from opendbc.car.volvo.eucd_full_stop import EucdFullStop
   fs = EucdFullStop()
   fs.active = fs.cam_standby = True
   fs.tpl_fsm4 = {"Byte_0": 0x55, "ACC_BrakeRequest": 1}
-  CS = SimpleNamespace(eucd_ecm_acc_engaged=True, eucd_car_hold=True,
+  CS = SimpleNamespace(eucd_ecm_acc_engaged=True, eucd_car_hold=True, eucd_ecm_standstill_ready=False,
                        eucd_stock_FSM3={"ACC_NoTargetCancel": 0, "Byte_6": 0, "FrameKind": 0x81, "ACC_Check": 0},
                        eucd_stock_FSM0_frames=[{"Byte_0": 0, "ACC_AbortCode": 0, "ACC_Enabled": 0}],
                        eucd_stock_FSM4_frames=[{"Byte_2": 0}],
                        out=SimpleNamespace(vEgo=0., standstill=True, gasPressed=False))
   CC = SimpleNamespace(enabled=True, longActive=True, actuators=SimpleNamespace(accel=-1.))
-  for _ in range(int(3. / DT_CTRL)):
+  for _ in range(int(seconds / DT_CTRL)):
     fs.update(CC, CS)
-  assert fs.standstill and fs.holding
+  assert fs.holding and fs.standstill == (seconds >= CCP.EUCD_STANDSTILL_DELAY)
   return fs, CC, CS
 
 
@@ -237,3 +237,24 @@ def test_gas_release_keeps_the_stop_until_op_long_is_back():
   CC.longActive = True
   fs.update(CC, CS)
   assert fs.active and not fs.driver_gas
+
+
+def test_short_stop_drives_off_on_traction():
+  fs, CC, CS = stopped_full_stop(seconds=1.)
+  CC.actuators.accel = 0.5
+  fs.update(CC, CS)
+  assert fs.active and not fs.stopping and not fs.holding and not fs.standstill
+
+
+def test_long_stop_waits_for_the_resume():
+  fs, CC, CS = stopped_full_stop()
+  CC.actuators.accel = 0.5
+  fs.update(CC, CS)
+  assert fs.stopping and fs.holding and fs.standstill
+
+
+def test_ecm_in_standstill_waits_for_the_resume():
+  fs, CC, CS = stopped_full_stop(seconds=1.)
+  CS.eucd_ecm_standstill_ready, CC.actuators.accel = True, 0.5
+  fs.update(CC, CS)
+  assert fs.stopping and fs.holding

@@ -104,8 +104,8 @@ class EucdFullStop:
         self.stopping = True
         self.stopped_frames = int(CCP.EUCD_STANDSTILL_DELAY / DT_CTRL)
 
-    # Stopping latched at the stop until the resume, also while the car holds there though OP asks to go
-    at_stop = not self.driving_off and standstill
+    # Latched until the resume only once in standstill; before it OP drives off on traction, as the camera (route 807)
+    at_stop = not self.driving_off and standstill and (self.standstill or CS.eucd_ecm_standstill_ready)
     stopping = not self.driving_off and ((CS.out.vEgo < CCP.EUCD_STOPPING_FLAG_SPEED and CC.actuators.accel <= 0.) or
                                          (at_stop and (self.stopping or CS.eucd_car_hold)))
     self.car_hold_frames = self.car_hold_frames + 1 if (stopping and standstill and CS.eucd_car_hold) else 0
