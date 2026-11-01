@@ -177,3 +177,16 @@ def test_accel_cap_off_without_close_target():
   # Same far lead for OP and camera: OP keeps its accel
   assert CarController._eucd_camera_accel_cap(cam_target(70), 2.0, 1.0) == 2.0
   assert CarController._eucd_camera_accel_cap(cam_target(9, v=0.), 1.0, 0.2) == 0.2
+
+
+def test_fsm3_template_never_keeps_the_camera_ack():
+  """The camera's ACC_Check (engaging at standstill) left in the template made the ECM brake in the drive-off (8a3)."""
+  from opendbc.car.volvo.eucd_full_stop import EucdFullStop
+  fs = EucdFullStop()
+  cam_fsm3 = {"ACC_NoTargetCancel": 0, "Byte_6": 0, "FrameKind": 0x81, "ACC_Check": 1}
+  CS = SimpleNamespace(eucd_ecm_acc_engaged=True, eucd_stock_FSM3=cam_fsm3,
+                       eucd_stock_FSM0_frames=[{"Byte_0": 0, "ACC_AbortCode": 0, "ACC_Enabled": 1}],
+                       eucd_stock_FSM4_frames=[{"Byte_2": 0}], out=SimpleNamespace(vEgo=0.))
+  fs.update(SimpleNamespace(longActive=False), CS)
+  assert fs.tpl_fsm3["data"]["ACC_Check"] == 0
+  assert cam_fsm3["ACC_Check"] == 1  # the camera's frame untouched

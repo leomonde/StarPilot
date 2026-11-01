@@ -100,7 +100,9 @@ class CarControllerParams:
   # Resume to the ECM held this long, on copies of the CEM's own CCButtons: its frames without Resume landed amid a
   # one-shot burst and the ECM ignored it (route 89e, 580.5 s)
   EUCD_RESUME_HOLD_FRAMES = int(0.3 / DT_CTRL)
-  EUCD_SNG_OP_RESUME_TIME = 0.2  # s of openpilot resume before SNG (0.5 delayed the drive-off, route 89d)
+  # s of openpilot resume before SNG: the ECM drives off on its own on the resume, so a planner flicker at a red
+  # light must not pass (0.2 let a 0.22 s one through, the car crept to 2 km/h: route 8a4, 237.0 s)
+  EUCD_SNG_OP_RESUME_TIME = 0.5
   EUCD_MIN_STEER_SPEED = 0.1  # m/s, no steering nor cancel button below this
 
   # OP's stop to 0, replaying the camera's own stop (route 807). As the Ford/Toyota ports, the planner decides (lead,

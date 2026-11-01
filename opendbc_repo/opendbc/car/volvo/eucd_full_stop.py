@@ -57,7 +57,9 @@ class EucdFullStop:
     if CS.eucd_ecm_acc_engaged and not cancelled and not self.active:
       for f in CS.eucd_stock_FSM0_frames:
         self.tpl_fsm0[int(f["Byte_0"])] = f
-      self.tpl_fsm3["data" if int(CS.eucd_stock_FSM3["FrameKind"]) == 0x81 else "type"] = dict(CS.eucd_stock_FSM3)
+      # ACC_Check is the camera's ack, only for an instant (engaging, resume): kept in the template the ECM brakes
+      # ~0.9 s into the drive-off (routes 8a2 244.7 s, 8a3 253.7 s); OP sets its own ack on the resume
+      self.tpl_fsm3["data" if int(CS.eucd_stock_FSM3["FrameKind"]) == 0x81 else "type"] = {**CS.eucd_stock_FSM3, "ACC_Check": 0}
       if CS.eucd_stock_FSM4_frames:
         self.tpl_fsm4 = CS.eucd_stock_FSM4_frames[-1]
 
