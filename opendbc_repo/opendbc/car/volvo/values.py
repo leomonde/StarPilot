@@ -97,18 +97,13 @@ class CarControllerParams:
   EUCD_STEER_TIMEOUT = 30 / DT_CTRL  # frames of 0 torque before the EPS faults
   EUCD_BLOCK_LEN = 8   # frames to block steering on a direction change
   EUCD_DEADZONE = 0.2  # deg, keep the previous direction inside it
-  # Resume to the ECM held this long, on copies of the CEM's own CCButtons: its frames without Resume landed amid a
-  # one-shot burst and the ECM ignored it (route 89e, 580.5 s)
+  # Resume held this long on copies of the CEM's CCButtons: a one-shot burst was lost amid its frames (route 89e)
   EUCD_RESUME_HOLD_FRAMES = int(0.3 / DT_CTRL)
-  # s of openpilot resume before SNG: the ECM drives off on its own on the resume, so a planner flicker at a red
-  # light must not pass (0.2 let a 0.22 s one through, the car crept to 2 km/h: route 8a4, 237.0 s)
+  # s of planner resume before SNG: 0.2 let a red-light flicker through, the ECM drove off on its own (route 8a4)
   EUCD_SNG_OP_RESUME_TIME = 0.5
   EUCD_MIN_STEER_SPEED = 0.1  # m/s, no steering nor cancel button below this
 
-  # OP's stop to 0, replaying the camera's own stop (route 807). As the Ford/Toyota ports, the planner decides (lead,
-  # red light, stop sign, obstacle) and the port follows accel, stopping and cruiseControl.resume: below the enter
-  # speed, braking, OP owns the ECM with the camera's last clean FSM0/FSM3/FSM4 and the camera is shown ACC standby.
-  # The camera cancels slow with no target (FSM3 NoTargetCancel, then FSM0 abort 0x10, routes 827/895): never engaged then
+  # OP's stop to 0 (route 807): below the enter speed, braking, OP owns the ECM and the camera is shown ACC standby
   EUCD_FULL_STOP = True
   EUCD_FULL_STOP_ENTER_SPEED = 25. * CV.KPH_TO_MS  # OP takes the ECM below this while braking; 30 handed back and forth with the resync at 32 (route 89b)
   EUCD_STOPPING_FLAG_SPEED = 2.6 * CV.KPH_TO_MS  # FSM4 b1 F1 -> F9 below this
@@ -117,9 +112,7 @@ class CarControllerParams:
   EUCD_HOLD_ACCEL = -0.08  # m/s^2, FSM3 accel while the car holds (raw 0x7C)
   EUCD_GO_RETRY_TIME = 2.0  # s still stopped after the resume burst -> standstill again, retry
   EUCD_ECM_READY_TIMEOUT = 3.0  # s after FSM3 ACC_Standstill: resume sent even without the ECM's ready (seen 1.5 s)
-  # The camera is shown the driver's side of it: ACC standby (EngineData, 0x325) for the whole stop, so it never
-  # aborts nor alerts. It follows the ECM's ACC state (route 881), so it re-engages like on the driver's Set:
-  # Set on its bus, then EngineData engaged again 30 ms later
+  # Camera shown ACC standby for the whole stop, re-engaged like on the driver's Set: Set, then EngineData 30 ms later
   EUCD_CAM_RESYNC_SPEED = 32. * CV.KPH_TO_MS  # re-engage above this (its ACC minimum is 30)
   EUCD_CAM_SET_FRAMES = int(0.16 / DT_CTRL)  # Set press to the camera, as long as the driver's (route 885)
   EUCD_CAM_SPOOF_RELEASE_FRAMES = int(0.03 / DT_CTRL)  # EngineData engaged again this long after the Set
@@ -165,9 +158,7 @@ class CarControllerParams:
   EUCD_DOWNHILL_BRAKE_OFFSET_MAX = 0.15  # m/s^2, downhill shift cap
   # Extra uphill margin before BRAKE
   EUCD_UPHILL_BRAKE_ENTER_EXTRA = 0.6  # fraction of the uphill offset
-  # Downhill coast tolerance over the ACC set speed
-  # Downhill: the planner targets the set speed + this (carstate reports it), so OP holds it with light braking. The
-  # old coast band let the car run over the set against the planner, whose integrator then braked hard (routes 89f, 8a1)
+  # Downhill: the planner targets set + this, so OP holds it with light braking (routes 89f, 8a1)
   EUCD_DOWNHILL_SET_OFFSET = 5. * CV.KPH_TO_MS
   EUCD_DOWNHILL_ENTER_PITCH = -2.  # deg, downhill below this for EUCD_DOWNHILL_ENTER_TIME
   EUCD_DOWNHILL_EXIT_PITCH = -1.  # deg, back to the set above this for EUCD_DOWNHILL_EXIT_TIME

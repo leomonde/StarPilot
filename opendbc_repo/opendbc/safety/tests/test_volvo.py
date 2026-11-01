@@ -588,8 +588,7 @@ class TestVolvoEUCD(common.CarSafetyTest, common.AngleSteeringSafetyTest):
       self.assertEqual(engaged, self.safety.get_controls_allowed(), f"{state=}")
 
   def test_button_rules_only_to_the_car(self):
-    # Resume/cancel to the car need controls allowed / cruise engaged. OP relays every CEM frame to the camera
-    # (driver's buttons included), which cannot engage the ECM, so the camera bus is not checked
+    # Resume/cancel to the car need controls allowed / cruise engaged; the camera bus gets every CEM frame, not checked
     resume = {"ACCResumeBtn": 1, "ACCResumeBtnInv": 0, "ACCOnOffBtnInv": 1}
     cancel = {"ACCOnOffBtn": 1, "ACCOnOffBtnInv": 0, "ACCResumeBtnInv": 1}
     self._rx(self._pcm_status_msg(False))
@@ -695,8 +694,7 @@ class TestVolvoEUCD(common.CarSafetyTest, common.AngleSteeringSafetyTest):
           self.assertEqual(expected, result, f"{addr=:#x} {controls_allowed=} {gas_pressed=}")
 
   def test_gas_in_op_stop_keeps_camera_fsm_off_the_ecm(self):
-    # In OP's stop (camera shown ACC standby, ECM engaged) the camera's FSM1/FSM3 stay off the ECM also on the gas,
-    # so the ECM stays engaged and the driver drives off on the pedal; OP's FSM3 carries no accel meanwhile
+    # In OP's stop the camera's FSM1/FSM3 stay off the ECM also on the gas; OP's FSM3 carries no accel
     def forwarded():
       return {addr: self.safety.safety_fwd_hook(VOLVO_PARTY_BUS, addr) == VOLVO_MAIN_BUS for addr in (0x260, 0x270)}
     standby_view = self.packer.make_can_msg_safety("EngineData", VOLVO_PARTY_BUS, {"ACC_State_ECM": 2})

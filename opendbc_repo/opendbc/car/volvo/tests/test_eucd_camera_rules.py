@@ -225,3 +225,15 @@ def test_disengaged_on_the_gas_ends_the_stop():
   CS.out.gasPressed, CC.longActive, CC.enabled = True, False, False
   fs.update(CC, CS)
   assert not fs.active and not fs.driver_gas
+
+
+def test_gas_release_keeps_the_stop_until_op_long_is_back():
+  fs, CC, CS = stopped_full_stop()
+  CS.out.gasPressed, CC.longActive = True, False
+  fs.update(CC, CS)
+  CS.out.gasPressed = False  # pedal released, OP's long back a frame later
+  fs.update(CC, CS)
+  assert fs.active and fs.driver_gas
+  CC.longActive = True
+  fs.update(CC, CS)
+  assert fs.active and not fs.driver_gas

@@ -37,8 +37,7 @@
 
 static bool volvo_eucd;
 
-// The camera's own FSM3/FSM4 just received: OP may send them back unchanged beyond its limits (the camera's hard
-// brake, its brake request while OP's long is not allowed), but nothing else
+// The camera's own FSM3/FSM4 just received: may go back unchanged beyond OP's limits, nothing else
 #define VOLVO_EUCD_CAM_FRAMES 4U
 #define VOLVO_EUCD_CAM_FRAME_MAX_AGE_US 100000U
 typedef struct {
@@ -50,9 +49,7 @@ typedef struct {
 static VolvoCamFrames volvo_eucd_cam_fsm3;
 static VolvoCamFrames volvo_eucd_cam_fsm4;
 
-// OP owns the ECM in its stop (it shows the camera ACC standby while the ECM is engaged): the camera's FSM1/FSM3 stay
-// off the ECM also with the driver on the gas, so the ECM stays engaged and drives off on the gas. Fresh while OP keeps
-// showing that standby, counted down per ECM frame: the camera's frames are forwarded again a few frames after it stops
+// OP's stop (camera shown standby, ECM engaged): camera FSM1/FSM3 kept off the ECM also on the gas, per ECM frame
 #define VOLVO_EUCD_OP_OWNS_ECM_FRAMES 3
 static int volvo_eucd_op_owns_ecm_fresh = 0;
 
@@ -168,8 +165,7 @@ static bool volvo_eucd_tx_hook(const CANPacket_t *msg) {
   bool violation = false;
   const unsigned int addr = msg->addr;
 
-  // Safety check for CC button signals to the car. The camera bus gets every CEM frame relayed by OP (driver's
-  // buttons included), which cannot engage the ECM.
+  // CC buttons to the car; the camera bus gets every CEM frame relayed, which cannot engage the ECM
   if ((addr == VOLVO_EUCD_CCButtons) && (msg->bus == VOLVO_MAIN_BUS)) {
     // Violation if resume button is pressed while controls not allowed, or
     // if cancel button is pressed when cruise isn't engaged.
@@ -225,8 +221,7 @@ static bool volvo_eucd_tx_hook(const CANPacket_t *msg) {
     }
   }
 
-  // FSM4 hydraulic brake request only with OP's long allowed, or the camera's own frame sent back unchanged (its
-  // brake request while OP does not control, e.g. with ACC off or the driver on the gas: route 807).
+  // FSM4 brake request only with OP's long allowed, or the camera's own frame unchanged (route 807)
   if (addr == VOLVO_EUCD_FSM4) {
     const bool brake_request = (GET_BYTES(msg, 5, 1) & 0x40U) != 0U;
     violation |= brake_request && !get_longitudinal_allowed() && !volvo_cam_frames_match(&volvo_eucd_cam_fsm4, msg);
@@ -241,8 +236,7 @@ static bool volvo_eucd_tx_hook(const CANPacket_t *msg) {
 
 static bool volvo_eucd_fwd_hook(int bus_num, int addr) {
   bool block_msg = false;
-  // camera FSM1/FSM3 blocked while OP controls (OP sends them). On the gas the camera's go to the ECM (gas has
-  // priority), except in OP's stop: OP's FSM3 then carries no accel (long not allowed), the driver's pedal drives
+  // Camera FSM1/FSM3 blocked while OP controls; on the gas they go to the ECM, except in OP's stop (OP sends no accel)
   const bool op_owns_ecm = volvo_eucd_op_owns_ecm_fresh > 0;
   if (((unsigned int)bus_num == VOLVO_PARTY_BUS) && controls_allowed && (!gas_pressed || op_owns_ecm)) {
     if (((unsigned int)addr == VOLVO_EUCD_FSM1) || ((unsigned int)addr == VOLVO_EUCD_FSM3)) {

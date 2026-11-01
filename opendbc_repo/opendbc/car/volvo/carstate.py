@@ -266,8 +266,7 @@ class CarState(CarStateBase):
       ret.cruiseState.standstill = bool(cam_cp.vl["FSM3"]["ACC_Standstill"]) and ret.standstill
     # The car holds the stop (BrakeReqAck b0 bit7, route 807)
     self.eucd_car_hold = bool(pt_cp.vl["BrakeReqAck"]["StandstillHold"])
-    # The ECM takes a resume from the ACC standstill only once 0x1FF b0 goes 70 -> D0, ~1.5 s after FSM3 ACC_Standstill
-    # (routes 898/899); a resume before it is ignored (route 89b, 344.9 s)
+    # The ECM takes a resume only once 0x1FF b0 goes 70 -> D0, ~1.5 s after ACC_Standstill (routes 899, 89b)
     self.eucd_ecm_standstill_ready = int(pt_cp.vl["BrakeHold"]["Byte_0"]) == 0xD0
     ret.cruiseState.nonAdaptive = False
     ret.accFaulted = False

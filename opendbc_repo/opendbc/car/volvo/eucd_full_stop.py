@@ -14,13 +14,7 @@ def eucd_cam_cancelled(CS) -> bool:
 
 
 class EucdFullStop:
-  """OP's stop to 0 on the EUCD, replaying the camera's own stop (route 807).
-
-  As the Ford/Toyota ports, the planner decides (lead, red light, stop sign, obstacle) and this follows its accel and
-  cruiseControl.resume. Below the enter speed, braking, OP owns the ECM with the camera's last clean FSM0/FSM3/FSM4,
-  and the camera is shown the driver's side of it: ACC standby, so it never cancels slow with no target (routes
-  827/895) nor aborts. After the drive-off it is re-engaged like on the driver's Set (route 885).
-  """
+  """OP's stop to 0 on the EUCD: the planner decides, OP replays the camera's own stop (route 807)."""
 
   def __init__(self):
     self.active = False  # OP owns the ECM: FSM0/FSM3/FSM4 from the camera's templates
@@ -58,21 +52,16 @@ class EucdFullStop:
     if CS.eucd_ecm_acc_engaged and not cancelled and not self.active:
       for f in CS.eucd_stock_FSM0_frames:
         self.tpl_fsm0[int(f["Byte_0"])] = f
-      # ACC_Check is the camera's ack, only for an instant (engaging, resume): kept in the template the ECM brakes
-      # ~0.9 s into the drive-off (routes 8a2 244.7 s, 8a3 253.7 s); OP sets its own ack on the resume
+      # ACC_Check is the camera's instant ack: kept in the template, the ECM braked in the drive-off (routes 8a2, 8a3)
       self.tpl_fsm3["data" if int(CS.eucd_stock_FSM3["FrameKind"]) == 0x81 else "type"] = {**CS.eucd_stock_FSM3, "ACC_Check": 0}
       if CS.eucd_stock_FSM4_frames:
         self.tpl_fsm4 = CS.eucd_stock_FSM4_frames[-1]
 
     v = CS.out.vEgo
     have_templates = self.tpl_fsm0 and len(self.tpl_fsm3) == 2 and self.tpl_fsm4 is not None
-    # The driver's gas turns OP's long off but not the stop: the panda keeps the camera's FSM3 off the ECM while OP
-    # shows the camera standby, OP's frames carry no accel nor brake, so the ECM stays engaged and drives off on the
-    # pedal (before, the camera's frames reached it and the ACC went to standby: route 898, 357.7 s)
-    self.driver_gas = self.active and CC.enabled and CS.out.gasPressed
-    # Ended by the driver (brake, cancel) with the ECM still engaged: the ECM gets the camera's frames (standby) and
-    # drops, the camera keeps seeing standby until then, never the ECM engaged from standby, which aborted it 0x10 for
-    # good (route 896)
+    # Driver's gas keeps the stop (the panda keeps the camera off the ECM) until OP's long is back (route 518bf777|6e)
+    self.driver_gas = self.active and CC.enabled and (CS.out.gasPressed or (self.driver_gas and not CC.longActive))
+    # Ended by the driver with the ECM still engaged: the camera kept in standby until the ECM drops (route 896)
     if self.exit_standby_frames > 0:
       done = not CS.eucd_ecm_acc_engaged or self.exit_standby_frames * DT_CTRL >= CCP.EUCD_FULL_STOP_EXIT_STANDBY_MAX
       self.exit_standby_frames = 0 if (done or self.active) else self.exit_standby_frames + 1
@@ -85,8 +74,7 @@ class EucdFullStop:
       self._resync_camera(cancelled)
     elif (not self.active and CCP.EUCD_FULL_STOP and have_templates and not cancelled and
           v < CCP.EUCD_FULL_STOP_ENTER_SPEED and CC.actuators.accel < 0.):
-      # OP braking slow, lead or not: from now on the ECM gets the camera's last clean frames from OP, and the
-      # camera sees ACC standby
+      # OP braking slow, lead or not: OP owns the ECM with the camera's clean frames, the camera sees ACC standby
       self.active = self.cam_standby = True
 
     if self.active:
@@ -116,10 +104,10 @@ class EucdFullStop:
         self.stopping = True
         self.stopped_frames = int(CCP.EUCD_STANDSTILL_DELAY / DT_CTRL)
 
-    # Stopping latched at the stop until the resume burst, like the camera's
+    # Stopping latched at the stop until the resume, also while the car holds there though OP asks to go
     at_stop = not self.driving_off and standstill
     stopping = not self.driving_off and ((CS.out.vEgo < CCP.EUCD_STOPPING_FLAG_SPEED and CC.actuators.accel <= 0.) or
-                                         (at_stop and self.stopping))
+                                         (at_stop and (self.stopping or CS.eucd_car_hold)))
     self.car_hold_frames = self.car_hold_frames + 1 if (stopping and standstill and CS.eucd_car_hold) else 0
     self.stopping = stopping
     # Held until OP asks to drive after the resume, so no brake pulse at the start
@@ -185,8 +173,7 @@ class EucdFullStop:
     return self.tpl_fsm3[kind]
 
   def fsm4(self, stock_fsm4):
-    """FSM4 to the ECM, and whether OP's mode applies: the camera's abort (b2 FC) kept from it, stopping flag, brake
-    request released while the car holds."""
+    """FSM4 to the ECM and whether OP's mode applies: camera abort kept from it, stopping flag, hold release."""
     # b0 alternates 55/AA as the camera's
     fsm4 = {**self.tpl_fsm4, "Byte_0": stock_fsm4["Byte_0"], "ACC_BrakeRequest": 0}
     # b1 F1 -> F9: stopping

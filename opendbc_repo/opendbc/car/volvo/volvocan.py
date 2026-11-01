@@ -548,17 +548,14 @@ def create_eucd_cam_brake_level(packer, stock_brake_level, frozen_level: int | N
 
 def create_eucd_cam_wheel_status(packer, stock_wheelspeed1, mask: bool, spoof: bool = False, hide_hold: bool = False,
                                  show_standby: bool = False):
-  # wheelspeed1 to the camera; brake request bit masked or spoofed, standstill hold hidden,
-  # ACC brake applied hidden in the standby view
+  # wheelspeed1 to the camera: brake request masked or spoofed, standstill hold and standby-view ACC brake hidden
   values = _eucd_copy(stock_wheelspeed1, skip=("WhlSpdRR", "WhlSpdLR"))
   if mask:
     values["BrakeReqActive"] = 0
   elif spoof:
     values["BrakeReqActive"] = 1
   if show_standby:
-    # follows the ACC's brake mode and holds at standstill (route 807); the camera latched FC ~1.5 s after it showed
-    # up in its standby view (routes 886/888/88b), never set in the standby after a driver cancel (route 885).
-    # Engaged, it answers the camera's own brake mode: hidden then, the camera aborts 0x10 (route 892)
+    # set by the ECM in its brake mode: seen in standby the camera latches FC (routes 886/888), engaged it must stay (892)
     values["ACC_BrakeApplied"] = 0
   if hide_hold:
     values["StandstillHold"] = 0
