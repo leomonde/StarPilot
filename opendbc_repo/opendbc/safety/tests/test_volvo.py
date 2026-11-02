@@ -25,6 +25,7 @@ import unittest
 
 import numpy as np
 
+from opendbc.safety import ALTERNATIVE_EXPERIENCE
 from opendbc.car.volvo.interface import SAFETY_VOLVO
 from opendbc.car.volvo.values import VolvoSafetyFlags
 from opendbc.car.volvo.volvocan import create_c1_checksum, create_c1_steering_control
@@ -696,6 +697,17 @@ class TestVolvoEUCD(common.CarSafetyTest, common.AngleSteeringSafetyTest):
           should_block = controls_allowed and not gas_pressed
           expected = -1 if should_block else VOLVO_MAIN_BUS
           self.assertEqual(expected, result, f"{addr=:#x} {controls_allowed=} {gas_pressed=}")
+
+  def test_aol_with_acc_available(self):
+    # with the LKAS button on another function, always on lateral follows the ACC main on
+    self.safety.set_alternative_experience(ALTERNATIVE_EXPERIENCE.ALWAYS_ON_LATERAL)
+    self.safety.set_controls_allowed(False)
+    self._reset_speed_measurement(1)
+    self._rx(self._toggle_aol(False))
+    for available in (False, True, False):
+      self._rx(self.packer.make_can_msg_safety("FSM0", VOLVO_PARTY_BUS, {"ACC_Available": int(available)}))
+      self._set_prev_desired_angle(0)
+      self.assertEqual(available, self._tx(self._angle_cmd_msg(1, True)), f"{available=}")
 
   def test_gas_in_op_stop_keeps_camera_fsm_off_the_ecm(self):
     # In OP's stop the camera's FSM1/FSM3 stay off the ECM also on the gas; OP's FSM3 carries no accel

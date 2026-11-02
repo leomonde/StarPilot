@@ -621,13 +621,19 @@ def test_volvo_aol_follows_the_car_lka_state(monkeypatch, tmp_path):
   )
   car_state = make_car_state(available=False, enabled=False)  # LKA works without the ACC
   sm = make_sm()
-  toggles = make_toggles(always_on_lateral=True, always_on_lateral_main=True)
-
+  lkas_aol = make_toggles(always_on_lateral=True, always_on_lateral_lkas=True, lkas_allowed_for_aol=True)
   for lka_on in (True, False, True):
     starpilot_car_state = SimpleNamespace(distancePressed=False, alwaysOnLateralAllowed=lka_on)
-    ret = card.update(car_state, starpilot_car_state, sm, toggles)
+    ret = card.update(car_state, starpilot_car_state, sm, lkas_aol)
     assert ret.alwaysOnLateralAllowed is lka_on
     assert ret.alwaysOnLateralEnabled is lka_on
+
+  # LKAS button on another function: always on lateral follows the ACC main on
+  main_aol = make_toggles(always_on_lateral=True, always_on_lateral_main=True)
+  for available in (True, False):
+    car_state = make_car_state(available=available, enabled=False)
+    ret = card.update(car_state, SimpleNamespace(distancePressed=False, alwaysOnLateralAllowed=False), sm, main_aol)
+    assert ret.alwaysOnLateralAllowed is available
 
 
 def test_sonata_hybrid_lkas_button_can_start_aol_before_normal_engagement(monkeypatch, tmp_path):

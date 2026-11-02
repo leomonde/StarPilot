@@ -124,6 +124,11 @@ static void volvo_eucd_rx_hook(const CANPacket_t *msg) {
         volvo_eucd_op_owns_ecm_fresh--;
       }
     }
+  } else if (msg->bus == VOLVO_PARTY_BUS) {
+    if (msg->addr == VOLVO_EUCD_FSM0) {
+      // Signal: ACC_Available, the camera's ACC main on (always on lateral)
+      acc_main_on = GET_BIT(msg, 17U);
+    }
   } else {
     // no other bus is monitored
   }

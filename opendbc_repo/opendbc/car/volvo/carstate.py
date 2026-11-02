@@ -64,6 +64,7 @@ class CarState(CarStateBase):
     # Set by the carcontroller: OP's stop to 0 owns the ACC standstill
     self.eucd_full_stop_active = False
     self.eucd_full_stop_standstill = False
+    self.eucd_lka_state_prev: bool | None = None
     self.eucd_downhill = False  # set by the carcontroller
     self.eucd_ecm_standstill_ready = False
 
@@ -325,6 +326,12 @@ class CarState(CarStateBase):
       pressed = bool(pt_cp.vl["CCButtons"][signal]) and not pt_cp.vl["CCButtons"][signal + "Inv"]
       button_events.extend(create_button_events(pressed, self.eucd_gap_button_states[signal], {True: ButtonType.gapAdjustCruise}))
       self.eucd_gap_button_states[signal] = pressed
+    # LKA button: no own bit, each press flips LKA_State (route 8a8)
+    lka_state = bool(pt_cp.vl["CCButtons"]["LKA_State"])
+    if self.eucd_lka_state_prev is not None and lka_state != self.eucd_lka_state_prev:
+      button_events += [structs.CarState.ButtonEvent(pressed=True, type=ButtonType.lkas),
+                        structs.CarState.ButtonEvent(pressed=False, type=ButtonType.lkas)]
+    self.eucd_lka_state_prev = lka_state
     ret.buttonEvents = button_events
 
     # lock info

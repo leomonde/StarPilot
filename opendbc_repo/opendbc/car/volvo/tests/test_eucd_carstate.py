@@ -13,7 +13,7 @@ CCBUTTONS = 0x127
 # CCButtons frames from V60 routes: idle, time gap increase, time gap decrease
 IDLE = bytes.fromhex("88108761a7ff0000")
 GAP_INCREASE = bytes.fromhex("88108761a5ff0200")
-GAP_DECREASE = bytes.fromhex("88108361a3ff0400")
+GAP_DECREASE = bytes.fromhex("88108761a3ff0400")  # LKA_State (b2 bit2) as in IDLE, else it is an LKA press
 # increase bit set without its inverted copy cleared: not a press
 GAP_INCREASE_NO_INV = bytes.fromhex("88108761a7ff0200")
 
@@ -72,3 +72,17 @@ def test_gear_lever(car, gear, speed_kph, expected):
     parser.update([(1_000_000, [CanData(*m) for m in msgs])])
   ret, _ = cs.update(parsers, None)
   assert ret.gearShifter == expected
+
+
+def test_lka_press_events(car):
+  cs, parsers = car
+  packer = CANPacker(DBC[CAR.VOLVO_V60][Bus.pt])
+  presses = []
+  for t, lka in enumerate((1, 1, 0, 0, 1)):
+    msgs = [packer.make_can_msg("CCButtons", 0, {"LKA_State": lka})]
+    for parser in parsers.values():
+      parser.update([(1_000_000 * (t + 1), [CanData(*m) for m in msgs])])
+    ret, fp_ret = cs.update(parsers, None)
+    presses.append(sum(be.type == ButtonType.lkas and be.pressed for be in ret.buttonEvents))
+    assert fp_ret.alwaysOnLateralAllowed == bool(lka)
+  assert presses == [0, 0, 1, 0, 1]  # one press per LKA_State flip, none at start

@@ -122,8 +122,8 @@ def test_fleet_aol_state_sequence(platform, mode, isolated_settings, record_prop
     pytest.skip(f"AOL active coverage gap: current platform policy excludes {platform}; denial checked")
   if cp.dashcamOnly or cp.notCar:
     pytest.skip(f"AOL active coverage gap: empty-fingerprint configuration has dashcamOnly={cp.dashcamOnly}, notCar={cp.notCar}")
-  if platform == "VOLVO_V60":
-    pytest.skip("AOL follows the car's LKA, not the cruise: covered by test_volvo_aol_follows_the_car_lka_state")
+  if platform == "VOLVO_V60" and mode == "engage":
+    pytest.skip("LKAS button on AOL follows the car's LKA, not the cruise: covered by test_volvo_aol_follows_the_car_lka_state")
   if platform == "TESLA_MODEL_S_PREAP":
     denied = Sequence(cp, fp, toggles)
     denied.engage()

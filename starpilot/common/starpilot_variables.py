@@ -92,7 +92,7 @@ def _lkas_allowed_for_aol(car_make, cp_flags, fpcp_safety_configs) -> bool:
   hyundai_can_use_lkas_for_aol = car_make == "hyundai" and (
     bool(cp_flags & HyundaiFlags.CANFD) or hyundai_has_lda_button
   )
-  return hyundai_can_use_lkas_for_aol or car_make in ("ford", "honda")
+  return hyundai_can_use_lkas_for_aol or car_make in ("ford", "honda", "volvo")
 
 
 def _main_cruise_aol_allowed(button_control: float) -> bool:
