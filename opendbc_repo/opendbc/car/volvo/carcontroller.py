@@ -392,7 +392,9 @@ class CarController(CarControllerBase):
         self.eucd_sng_count = 0
       # In OP's stop only the planner's resume drives off (as Ford/Toyota), not the camera's distance jitter (route 884)
       lead_moved = CS.eucd_acc_distance > self.eucd_distance and not self.eucd_full_stop.active
-      drive_off = lead_moved or op_resume or self.eucd_full_stop.driver_gas
+      # The driver's Resume also drives off OP's stop: the ECM takes it, but held in standstill it stays (route 8ab, 436 s)
+      driver_resume = CS.eucd_driver_resume and self.eucd_full_stop.active
+      drive_off = lead_moved or op_resume or driver_resume or self.eucd_full_stop.driver_gas
       if at_standstill and self.eucd_waiting and drive_off and self.eucd_full_stop.drive_off_ready(CS):
         self.eucd_resume_hold_frames = CCP.EUCD_RESUME_HOLD_FRAMES
         if self.eucd_sng_count == 0:

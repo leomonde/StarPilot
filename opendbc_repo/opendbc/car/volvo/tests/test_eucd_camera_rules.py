@@ -258,3 +258,25 @@ def test_ecm_in_standstill_waits_for_the_resume():
   CS.eucd_ecm_standstill_ready, CC.actuators.accel = True, 0.5
   fs.update(CC, CS)
   assert fs.stopping and fs.holding
+
+
+def resume_buttons_after(driver_resume, active):
+  """One frame stopped in standstill: the Resume hold frames left and the drive-off request."""
+  from opendbc.car.volvo.eucd_full_stop import EucdFullStop
+  cc = CarController.__new__(CarController)
+  cc.frame, cc.eucd_last_resume_frame = 1000, 0
+  cc.eucd_op_resume_frames = cc.eucd_resume_hold_frames = cc.eucd_sng_ack_frames = cc.eucd_sng_count = 0
+  cc.eucd_waiting, cc.eucd_distance, cc.eucd_last_ccbuttons = False, 0, None
+  cc.eucd_full_stop = EucdFullStop()
+  cc.eucd_full_stop.active = active
+  CS = SimpleNamespace(out=SimpleNamespace(cruiseState=SimpleNamespace(enabled=True, standstill=True), vEgo=0.),
+                       eucd_acc_distance=0, eucd_stock_CCButtons_frames=[], eucd_driver_resume=driver_resume,
+                       eucd_ecm_standstill_ready=True)
+  cc._eucd_resume_buttons(SimpleNamespace(cruiseControl=SimpleNamespace(resume=False)), CS, [])
+  return cc.eucd_resume_hold_frames, cc.eucd_full_stop.drive_off_request
+
+
+def test_driver_resume_drives_off_ops_stop():
+  assert resume_buttons_after(True, True) == (CCP.EUCD_RESUME_HOLD_FRAMES - 1, True)
+  assert resume_buttons_after(False, True) == (0, False)
+  assert resume_buttons_after(True, False) == (0, False)  # the camera's own stop takes it by itself

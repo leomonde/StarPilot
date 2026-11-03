@@ -86,3 +86,14 @@ def test_lka_press_events(car):
     presses.append(sum(be.type == ButtonType.lkas and be.pressed for be in ret.buttonEvents))
     assert fp_ret.alwaysOnLateralAllowed == bool(lka)
   assert presses == [0, 0, 1, 0, 1]  # one press per LKA_State flip, none at start
+
+
+def test_driver_resume_events(car):
+  # Resume needs the bit set and its inverted copy cleared, frames from route 8ab
+  resume = bytes.fromhex("88108761a7df0020")
+  no_inv = bytes.fromhex("88108761a7ff0020")
+  assert step(car, 1_000_000, IDLE) == []
+  assert step(car, 2_000_000, no_inv) == []
+  assert step(car, 3_000_000, resume) == [(ButtonType.resumeCruise, True)]
+  assert step(car, 4_000_000, resume) == []
+  assert step(car, 5_000_000, IDLE) == [(ButtonType.resumeCruise, False)]
