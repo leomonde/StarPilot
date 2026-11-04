@@ -6,7 +6,7 @@ from opendbc.car import Bus, ButtonType, CanData, structs
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.volvo.carstate import CarState
 from opendbc.car.volvo.interface import CarInterface
-from opendbc.car.volvo.values import CAR, DBC
+from opendbc.car.volvo.values import CAR, DBC, EcmAccState
 
 GearShifter = structs.CarState.GearShifter
 CCBUTTONS = 0x127
@@ -97,3 +97,20 @@ def test_driver_resume_events(car):
   assert step(car, 3_000_000, resume) == [(ButtonType.resumeCruise, True)]
   assert step(car, 4_000_000, resume) == []
   assert step(car, 5_000_000, IDLE) == [(ButtonType.resumeCruise, False)]
+
+
+@pytest.mark.parametrize("speed_kph, expected", [(0, []), (40, [(ButtonType.accelCruise, False)])])
+def test_set_plus_stopped_is_not_accel(car, speed_kph, expected):
+  # Stopped, Set+ only sets the speed: an accelCruise there reads as "go" to the planner (route 8b2, 572 s)
+  cs, parsers = car
+  packer = CANPacker(DBC[CAR.VOLVO_V60][Bus.pt])
+  events = []
+  for t, set_kph in enumerate((30, 30, 35)):
+    msgs = [packer.make_can_msg("EngineData", 0, {"ACC_State_ECM": EcmAccState.ENGAGED}),
+            packer.make_can_msg("VehicleSpeed1", 0, {"VehicleSpeed": speed_kph}),
+            packer.make_can_msg("ACC_Speed", 0, {"ACC_Speed": set_kph})]
+    for parser in parsers.values():
+      parser.update([(1_000_000 * (t + 1), [CanData(*m) for m in msgs])])
+    ret, _ = cs.update(parsers, None)
+    events = [(be.type, be.pressed) for be in ret.buttonEvents]
+  assert events == expected

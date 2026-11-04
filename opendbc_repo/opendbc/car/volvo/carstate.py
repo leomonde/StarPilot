@@ -308,7 +308,10 @@ class CarState(CarStateBase):
 
     # One accelCruise/decelCruise per frame from the pending delta
     cruise_kph_now = round(set_speed * CV.MS_TO_KPH)  # the driver's set, not the downhill offset
-    if ret.cruiseState.enabled and self.eucd_cruise_enabled_prev:
+    # Stopped, Set+/- only sets the speed: no accel/decel press, or the planner reads it as "go" (route 8b2, 572 s/591 s)
+    if ret.standstill:
+      self._eucd_pending_delta = 0
+    elif ret.cruiseState.enabled and self.eucd_cruise_enabled_prev:
       self._eucd_pending_delta += cruise_kph_now - self._eucd_cruise_speed_prev_kph
     self._eucd_cruise_speed_prev_kph = cruise_kph_now
 
