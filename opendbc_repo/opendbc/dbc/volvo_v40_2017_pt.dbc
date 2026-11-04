@@ -199,6 +199,7 @@ BO_ 464 DIM0: 8 DIM
 BO_ 480 BCM0: 8 BCM
 
 BO_ 528 CEM0: 8 CEM
+ SG_ LKA_State : 2|1@0+ (1,0) [0|1] "" XXX
 
 BO_ 608 CVM0: 8 CVM
  SG_ NEW_SIGNAL_1 : 7|8@0+ (1,0) [0|255] "" XXX
