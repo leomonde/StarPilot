@@ -456,6 +456,7 @@ RELEASE_TARGETS = (
   "opendbc_repo/opendbc/safety/tests/test_tesla_hw1.py",
   "opendbc_repo/opendbc/safety/tests/test_volvo_c1.py",
   "opendbc_repo/opendbc/safety/tests/test_volvo_cma.py",
+  "opendbc_repo/opendbc/safety/tests/test_volvo_eucd.py",
   "opendbc_repo/opendbc/safety/tests/test_volkswagen_stock_aol.py",
   "opendbc_repo/opendbc/safety/tests/test_volkswagen_engagement_arm.py",
   "opendbc_repo/opendbc/safety/tests/test_volkswagen_long_aol.py",

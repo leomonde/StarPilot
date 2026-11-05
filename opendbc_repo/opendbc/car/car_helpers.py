@@ -170,7 +170,7 @@ def fingerprint(can_recv: CanRecvCallable, can_send: CanSendCallable, set_obd_mu
       elif (normal_brand := normal_bus_query_brand(
           can_recv, normal_bus_topology,
           gm_probe=gm_normal_bus0_topology if _gm_fw_uses_normal_bus0() else None,
-          volvo_probe=volvo_normal_bus_topology if not fw_versions.FW_QUERY_CONFIGS['volvo'].requests else None,
+          volvo_probe=volvo_normal_bus_topology,
           tesla_probe=hw1_normal_bus0_topology if _tesla_fw_uses_normal_bus0() else None)) is not None:
 
         set_obd_multiplexing(False)
@@ -179,8 +179,9 @@ def fingerprint(can_recv: CanRecvCallable, can_send: CanSendCallable, set_obd_mu
           time.sleep(warmup_remaining)
         vin_buses = (0,) if normal_brand in ('ford', 'gm', 'volvo', 'tesla') else (0, 1)
         vin_rx_addr, vin_rx_bus, vin = get_vin(can_recv, can_send, vin_buses)
-        car_fw = get_fw_versions(can_recv, can_send, set_obd_multiplexing,
-                                 query_brand=normal_brand, normal_bus_only=True)
+        # This wiring is Polestar's, identified by live CAN: Volvo's firmware query is the V60's, on the OBD path.
+        car_fw = [] if normal_brand == 'volvo' else get_fw_versions(can_recv, can_send, set_obd_multiplexing,
+                                                                    query_brand=normal_brand, normal_bus_only=True)
         ecu_rx_addrs = {(fw.responseAddress, fw.subAddress or None, fw.bus) for fw in car_fw if fw.responseAddress > 0}
       else:
         # enable OBD multiplexing for VIN query

@@ -16,7 +16,8 @@ CMA = ['VOLVO_XC40_RECHARGE', 'VOLVO_S60_RECHARGE', 'POLESTAR_2']
 EXPECTED = {'VOLVO_V40': (2, 1610, 2.647, 14.7, .2),
             'VOLVO_XC40_RECHARGE': (0, 2170, 2.702, 15.8, .3),
             'VOLVO_S60_RECHARGE': (1, 2020, 2.872, 16.2, .3),
-            'POLESTAR_2': (5, 2123, 2.735, 15.8, .3)}
+            'POLESTAR_2': (5, 2123, 2.735, 15.8, .3),
+            'VOLVO_V60': (8, 1750, 2.776, 15.0, .2)}
 
 
 def interface(identity, alpha=False, release=False):
