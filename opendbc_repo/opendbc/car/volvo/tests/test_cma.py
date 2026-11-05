@@ -78,8 +78,10 @@ def test_all_final_params_and_angle_factory(identity, alpha, release):
   assert (cp.wheelbase, cp.steerRatio, cp.steerActuatorDelay) == expected_geometry
   assert cp.safetyConfigs[0].safetyParam == param
   assert cp.steerControlType == structs.CarParams.SteerControlType.angle
-  assert cp.pcmCruise and cp.radarUnavailable and not cp.dashcamOnly
-  assert not cp.alphaLongitudinalAvailable and not cp.openpilotLongitudinalControl
+  assert cp.pcmCruise and not cp.dashcamOnly
+  assert cp.radarUnavailable == (identity != 'VOLVO_V60')  # the V60's Delphi ESR
+  assert cp.alphaLongitudinalAvailable == (identity == 'VOLVO_V60')
+  assert cp.openpilotLongitudinalControl == (alpha and identity == 'VOLVO_V60')
   assert isinstance(create_lateral_controller(cp, ci, .01, mode='stock'), LatControlAngle)
 
 

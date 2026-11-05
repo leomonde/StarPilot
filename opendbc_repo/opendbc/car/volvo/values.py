@@ -58,7 +58,7 @@ class VolvoSPAPlatformConfig(PlatformConfig):
 
 @dataclass
 class VolvoEUCDPlatformConfig(PlatformConfig):
-  dbc_dict: DbcDict = field(default_factory=lambda: {Bus.pt: 'volvo_v60_2015_pt'})
+  dbc_dict: DbcDict = field(default_factory=lambda: {Bus.pt: 'volvo_v60_2015_pt', Bus.radar: 'ESR'})
 
 
 class CAR(Platforms):

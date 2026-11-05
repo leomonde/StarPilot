@@ -55,7 +55,16 @@ static uint32_t volvo_dispatch_compute_checksum(const CANPacket_t *msg) {
 static bool volvo_dispatch_quality(const CANPacket_t *msg) {
   return volvo_dispatch_c1 || volvo_dispatch_eucd || volvo_cma_receiver_quality(msg);
 }
+static void volvo_dispatch_optional_rx(const CANPacket_t *msg) {
+  if (volvo_dispatch_eucd) {
+    volvo_eucd_optional_rx(msg);
+  }
+}
+static bool volvo_dispatch_fwd(int bus_num, int addr) {
+  return volvo_dispatch_eucd && volvo_eucd_fwd_hook(bus_num, addr);
+}
 const safety_hooks volvo_dispatch_hooks = {.init = volvo_dispatch_init, .rx = volvo_dispatch_rx, .tx = volvo_dispatch_tx,
+  .optional_rx = volvo_dispatch_optional_rx, .fwd = volvo_dispatch_fwd,
   .get_counter = volvo_dispatch_get_counter,
   .get_checksum = volvo_dispatch_get_checksum, .compute_checksum = volvo_dispatch_compute_checksum,
   .get_quality_flag_valid = volvo_dispatch_quality};

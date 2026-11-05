@@ -1,8 +1,9 @@
 import pytest
 
 from opendbc.can import CANPacker
-from opendbc.car import Bus, CanData, structs
+from opendbc.car import Bus, ButtonType, CanData, structs
 from opendbc.car.common.conversions import Conversions as CV
+from opendbc.car.dashboard_speed_limit import Status
 from opendbc.car.volvo.eucd_can import calculate_eucd_lka_checksum, create_eucd_lka_msg
 from opendbc.car.volvo.eucd_carcontroller import CarControllerEUCD
 from opendbc.car.volvo.eucd_carstate import CarStateEUCD
@@ -33,8 +34,9 @@ def required_frames(**overrides):
     "EngineData": {"ACC_State_ECM": EcmAccState.ENGAGED},
     "CCButtons": {},
     "GearSelector": {"GearLever": 3},
+    "BrakeLevel": {}, "BrakeStatus": {}, "wheelspeed1": {}, "BrakeReqAck": {}, "BrakeHold": {}, "AccHold": {},
   }
-  cam_values = {"FSM0": {"ACC_Available": 1}, "FSM3": {"ACC_Standstill": 0}}
+  cam_values = {"FSM0": {"ACC_Available": 1}, "FSM1": {}, "FSM3": {"ACC_Standstill": 0}, "FSM4": {}, "FSM5": {"TSR_Speed": 0}}
   for name, signals in overrides.items():
     (cam_values if name in cam_values else values)[name] = signals
   return [CanData(*packer.make_can_msg(name, 0, signals)) for name, signals in values.items()] + \
@@ -51,14 +53,15 @@ def car_state(**overrides):
   return cs, parsers, cp
 
 
-def test_params_are_lateral_only_with_stock_acc():
+def test_params_and_alpha_long():
   for alpha in (False, True):
     for release in (False, True):
       cp = params(alpha, release)
       config = cp.safetyConfigs[0]
       assert (config.safetyModel, config.safetyParam) == (structs.CarParams.SafetyModel.volvo, VolvoSafetyFlags.EUCD.value)
-      assert cp.pcmCruise and not cp.openpilotLongitudinalControl and not cp.alphaLongitudinalAvailable
-      assert cp.radarUnavailable
+      assert cp.pcmCruise and cp.alphaLongitudinalAvailable
+      assert cp.openpilotLongitudinalControl == alpha
+      assert not cp.radarUnavailable  # Delphi ESR 2.5 on the aux bus
       assert cp.steerControlType == structs.CarParams.SteerControlType.angle
       assert cp.minSteerSpeed == 0.
       assert cp.steerActuatorDelay == pytest.approx(0.2)
@@ -110,6 +113,15 @@ def controller_state(speed=20., angle=0., brake=False):
   cs = type("CS", (), {})()
   cs.out = structs.CarState(vEgo=speed, vEgoRaw=speed, steeringAngleDeg=angle, brakePressed=brake)
   cs.eucd_pscm_stock_values = {"byte0": 0, "byte4": 0, "byte7": 0, "LKAActive": 0xFF, "EPSTorque": 0}
+  cs.eucd_ecm_acc_engaged = False
+  cs.eucd_ecm_standstill_ready = False
+  cs.eucd_car_hold = False
+  cs.eucd_acc_distance = 255
+  cs.eucd_driver_resume = False
+  cs.eucd_stock_FSM1 = {"ACC_Braking": 0}
+  cs.eucd_stock_FSM3 = {"ACC_AccelerationRequest": 0., "ACC_Mode": 1, "ACC_NoTargetCancel": 0, "Byte_6": 0, "FrameKind": 0x81, "ACC_Check": 0}
+  for name in ("FSM0", "FSM4", "BrakeLevel", "BrakeStatus", "wheelspeed1", "BrakeReqAck", "BrakeHold", "EngineData", "AccHold", "CCButtons"):
+    setattr(cs, f"eucd_stock_{name}_frames", [])
   return cs
 
 
@@ -119,7 +131,7 @@ def controller():
 
 def test_inactive_sends_zero_angle_and_no_direction():
   sends = controller().update(control(False, 10.), controller_state(), 0)[1]
-  assert [s[0] for s in sends] == [0x262, 0x246]
+  assert [s[0] for s in sends][:2] == [0x262, 0x246]
   assert sends[0][1][5] & 0x3 == 0
   assert ((sends[0][1][3] & 0x3F) << 8) + sends[0][1][4] == 8192  # 0 deg
 
@@ -127,9 +139,9 @@ def test_inactive_sends_zero_angle_and_no_direction():
 def test_active_steering_is_rate_limited_and_50hz():
   cc = controller()
   new_actuators, sends = cc.update(control(True, 10.), controller_state(), 0)
-  assert [s[0] for s in sends] == [0x262, 0x246]
+  assert [s[0] for s in sends][:2] == [0x262, 0x246]
   assert 0 < new_actuators.steeringAngleDeg <= 0.15 + 1e-3
-  assert cc.update(control(True, 10.), controller_state(), 0)[1] == []
+  assert 0x262 not in [s[0] for s in cc.update(control(True, 10.), controller_state(), 0)[1]]
   assert sends[0][1][5] & 0x3 == 2  # left
 
 
@@ -169,3 +181,93 @@ def test_engine_firmware_identifies_the_v60():
   fw = structs.CarParams.CarFw(ecu=structs.CarParams.Ecu.engine, address=0x7e0, subAddress=0, brand="volvo",
                                fwVersion=b"31361041 AJ" + bytes(13))
   assert match_fw_to_car([fw], "")[1] == {CAR.VOLVO_V60}
+
+
+CCBUTTONS = 0x127
+# CCButtons frames from V60 routes: idle, time gap increase, time gap decrease
+IDLE = bytes.fromhex("88108761a7ff0000")
+GAP_INCREASE = bytes.fromhex("88108761a5ff0200")
+GAP_DECREASE = bytes.fromhex("88108761a3ff0400")
+# increase bit set without its inverted copy cleared: not a press
+GAP_INCREASE_NO_INV = bytes.fromhex("88108761a7ff0200")
+
+
+@pytest.fixture
+def car():
+  cp = params()
+  return CarStateEUCD(cp), CarStateEUCD.get_can_parsers(cp)
+
+
+def step(car, t, frames):
+  cs, parsers = car
+  for parser in parsers.values():
+    parser.update([(t, frames)])
+  return cs.update(parsers)
+
+
+def button_step(car, t, dat):
+  return [(be.type, be.pressed) for be in step(car, t, [CanData(CCBUTTONS, dat, 0)]).buttonEvents]
+
+
+@pytest.mark.parametrize("pressed", [GAP_INCREASE, GAP_DECREASE])
+def test_gap_button_press_and_release(car, pressed):
+  assert button_step(car, 1_000_000, IDLE) == []
+  assert button_step(car, 2_000_000, pressed) == [(ButtonType.gapAdjustCruise, True)]
+  assert button_step(car, 3_000_000, pressed) == []
+  assert button_step(car, 4_000_000, IDLE) == [(ButtonType.gapAdjustCruise, False)]
+
+
+def test_gap_button_needs_inverted_signal(car):
+  assert button_step(car, 1_000_000, IDLE) == []
+  assert button_step(car, 2_000_000, GAP_INCREASE_NO_INV) == []
+
+
+def test_driver_resume_events(car):
+  # Resume needs the bit set and its inverted copy cleared, frames from route 8ab
+  resume = bytes.fromhex("88108761a7df0020")
+  no_inv = bytes.fromhex("88108761a7ff0020")
+  assert button_step(car, 1_000_000, IDLE) == []
+  assert button_step(car, 2_000_000, no_inv) == []
+  assert button_step(car, 3_000_000, resume) == [(ButtonType.resumeCruise, True)]
+  assert button_step(car, 4_000_000, resume) == []
+  assert button_step(car, 5_000_000, IDLE) == [(ButtonType.resumeCruise, False)]
+
+
+@pytest.mark.parametrize("speed_kph, expected", [(0, []), (40, [(ButtonType.accelCruise, False)])])
+def test_set_plus_stopped_is_not_accel(car, speed_kph, expected):
+  # Stopped, Set+ only sets the speed: an accelCruise there reads as "go" to the planner (route 8b2, 572 s)
+  packer = CANPacker(DBC_NAME)
+  events = []
+  for t, set_kph in enumerate((30, 30, 35)):
+    msgs = [packer.make_can_msg("EngineData", 0, {"ACC_State_ECM": EcmAccState.ENGAGED}),
+            packer.make_can_msg("VehicleSpeed1", 0, {"VehicleSpeed": speed_kph}),
+            packer.make_can_msg("ACC_Speed", 0, {"ACC_Speed": set_kph})]
+    ret = step(car, 1_000_000 * (t + 1), [CanData(*m) for m in msgs])
+    events = [(be.type, be.pressed) for be in ret.buttonEvents]
+  assert events == expected
+
+
+@pytest.mark.parametrize("tsr_kph, status", [(0, Status.ABSENT), (30, Status.VALID), (80, Status.VALID), (120, Status.VALID)])
+def test_tsr_speed_limit(tsr_kph, status):
+  cs, parsers, _ = car_state(FSM5={"TSR_Speed": tsr_kph})
+  packer = CANPacker(DBC_NAME)
+  # the parser learns the FSM5 cadence over repeated frames before the tracker trusts it
+  for i in range(1, 12):
+    frame = CanData(*packer.make_can_msg("FSM5", 2, {"TSR_Speed": tsr_kph}))
+    for parser in parsers.values():
+      parser.update([(1_000_000_000 + i * 100_000_000, [frame])])
+    cs.update(parsers)
+  observation = cs.dashboard_limit.observation
+  assert observation.status == status
+  assert observation.speed_mps == pytest.approx(tsr_kph * CV.KPH_TO_MS)
+
+
+def test_longitudinal_tx_is_50hz_and_keeps_the_relays():
+  cc = controller()
+  cs = controller_state()
+  cs.eucd_stock_CCButtons_frames = [{"ACCResumeBtn": 0, "ACCResumeBtnInv": 1, "ACCSetBtn": 0, "ACCSetBtnInv": 1}]
+  sent = []
+  for i in range(10):
+    sent += [s[0] for s in cc.update(control(False), cs, i * 10_000_000)[1]]
+  assert sent.count(0x270) == sent.count(0x260) == 5  # FSM3, FSM1
+  assert sent.count(0x127) == 10  # CEM frames relayed to the camera

@@ -6,13 +6,67 @@
 #define VOLVO_EUCD_PARTY_BUS 2U
 
 #define VOLVO_EUCD_AccPedal      0x020U  // RX, gas pedal
-#define VOLVO_EUCD_FSM0          0x051U  // RX from the camera; ACC state
+#define VOLVO_EUCD_FSM0          0x051U  // TX by OP, camera's relayed; ACC state
 #define VOLVO_EUCD_EngineData    0x12AU  // RX, ECM ACC state
 #define VOLVO_EUCD_VehicleSpeed1 0x148U  // RX, vehicle speed
 #define VOLVO_EUCD_Brake_Info    0x20AU  // RX, driver brake pressed
 #define VOLVO_EUCD_CCButtons     0x127U  // TX by OP, CC buttons
 #define VOLVO_EUCD_PSCM1         0x246U  // TX by OP to camera, PSCM state
+#define VOLVO_EUCD_BRAKE_LEVEL   0x133U  // TX by OP to camera, brake level
+#define VOLVO_EUCD_BRAKE_ACK     0x323U  // TX by OP to camera, brake applied
+#define VOLVO_EUCD_WHEELSPEED1   0x220U  // TX by OP to camera, rear wheel speeds + brake request active
+#define VOLVO_EUCD_BRAKE_REQ_ACK 0x299U  // TX by OP to camera, brake request ack
+#define VOLVO_EUCD_BRAKE_HOLD    0x1FFU  // TX by OP to camera, brake hold state (masked in OP's no-target stop)
+#define VOLVO_EUCD_ACC_HOLD      0x325U  // TX by OP to camera, ECM ACC hold state (shown as standby in OP's no-target stop)
+#define VOLVO_EUCD_FSM1          0x260U  // TX by OP, ACC radar/distance message
 #define VOLVO_EUCD_FSM2          0x262U  // TX by OP, LKA command
+#define VOLVO_EUCD_FSM3          0x270U  // TX by OP, ACC accel request + status
+#define VOLVO_EUCD_FSM4          0x31AU  // TX by OP, camera's relayed; brake request
+
+// The camera's own FSM3/FSM4 just received: may go back unchanged beyond OP's limits, nothing else
+#define VOLVO_EUCD_CAM_FRAMES 4U
+#define VOLVO_EUCD_CAM_FRAME_MAX_AGE_US 100000U
+typedef struct {
+  uint8_t data[VOLVO_EUCD_CAM_FRAMES][8];
+  uint32_t ts[VOLVO_EUCD_CAM_FRAMES];
+  bool valid[VOLVO_EUCD_CAM_FRAMES];
+  uint8_t index;
+} VolvoEucdCamFrames;
+static VolvoEucdCamFrames volvo_eucd_cam_fsm3;
+static VolvoEucdCamFrames volvo_eucd_cam_fsm4;
+
+// OP's stop (camera shown standby, ECM engaged): camera FSM1/FSM3 kept off the ECM also on the gas, per ECM frame
+#define VOLVO_EUCD_OP_OWNS_ECM_FRAMES 3
+static int volvo_eucd_op_owns_ecm_fresh = 0;
+
+static void volvo_eucd_cam_frames_clear(VolvoEucdCamFrames *frames) {
+  frames->index = 0U;
+  for (uint8_t i = 0U; i < VOLVO_EUCD_CAM_FRAMES; i++) {
+    frames->valid[i] = false;
+  }
+}
+
+static void volvo_eucd_cam_frames_store(VolvoEucdCamFrames *frames, const CANPacket_t *msg) {
+  for (uint8_t byte = 0U; byte < 8U; byte++) {
+    frames->data[frames->index][byte] = msg->data[byte];
+  }
+  frames->ts[frames->index] = microsecond_timer_get();
+  frames->valid[frames->index] = true;
+  frames->index = (frames->index + 1U) % VOLVO_EUCD_CAM_FRAMES;
+}
+
+static bool volvo_eucd_cam_frames_match(const VolvoEucdCamFrames *frames, const CANPacket_t *msg) {
+  const uint32_t now = microsecond_timer_get();
+  bool matches_cam = false;
+  for (uint8_t i = 0U; i < VOLVO_EUCD_CAM_FRAMES; i++) {
+    bool matches = frames->valid[i] && (safety_get_ts_elapsed(now, frames->ts[i]) <= VOLVO_EUCD_CAM_FRAME_MAX_AGE_US);
+    for (uint8_t byte = 0U; byte < 8U; byte++) {
+      matches &= msg->data[byte] == frames->data[i][byte];
+    }
+    matches_cam |= matches;
+  }
+  return matches_cam;
+}
 
 static void volvo_eucd_rx_hook(const CANPacket_t *msg) {
   if (msg->bus == VOLVO_EUCD_MAIN_BUS) {
@@ -47,6 +101,9 @@ static void volvo_eucd_rx_hook(const CANPacket_t *msg) {
       // Signal: ACC_State_ECM (byte 4 bits 5:4: 1 off, 2 standby, 3 engaged)
       bool cruise_engaged = (((unsigned int)msg->data[4] >> 4) & 0x3U) == 0x3U;
       pcm_cruise_check(cruise_engaged);
+      if (volvo_eucd_op_owns_ecm_fresh > 0) {
+        volvo_eucd_op_owns_ecm_fresh--;
+      }
     }
   } else if (msg->bus == VOLVO_EUCD_PARTY_BUS) {
     if (msg->addr == VOLVO_EUCD_FSM0) {
@@ -55,6 +112,18 @@ static void volvo_eucd_rx_hook(const CANPacket_t *msg) {
     }
   } else {
     // no other bus is monitored
+  }
+}
+
+// Frames outside the RX checks: the camera's FSM3/FSM4 as it sends them
+static void volvo_eucd_optional_rx(const CANPacket_t *msg) {
+  if (msg->bus == VOLVO_EUCD_PARTY_BUS) {
+    if (msg->addr == VOLVO_EUCD_FSM3) {
+      volvo_eucd_cam_frames_store(&volvo_eucd_cam_fsm3, msg);
+    }
+    if (msg->addr == VOLVO_EUCD_FSM4) {
+      volvo_eucd_cam_frames_store(&volvo_eucd_cam_fsm4, msg);
+    }
   }
 }
 
@@ -100,15 +169,30 @@ static bool volvo_eucd_tx_hook(const CANPacket_t *msg) {
     },
   };
 
+  // FSM3 byte1 = ACC_AccelerationRequest (factor 0.04, offset -5.04); raw_accel = byte1 - 126.
+  // +50 raw = +2.0 m/s^2 max accel; -88 raw = -3.52 m/s^2 max decel (openpilot's -3.5 on the 0.04 step).
+  static const LongitudinalLimits VOLVO_EUCD_LONG_LIMITS = {
+    .max_accel = 50,
+    .min_accel = -88,
+    .inactive_accel = 0,
+  };
+
   bool tx = true;
   bool violation = false;
   const unsigned int addr = msg->addr;
 
+  // CC buttons to the car; the camera bus gets every CEM frame relayed, which cannot engage the ECM
   if ((addr == VOLVO_EUCD_CCButtons) && (msg->bus == VOLVO_EUCD_MAIN_BUS)) {
     // Violation if resume button is pressed while controls not allowed, or
     // if cancel button is pressed when cruise isn't engaged.
     violation |= !cruise_engaged_prev && (GET_BIT(msg, 59U) || !(GET_BIT(msg, 43U)));  // Signals: ACCOnOffBtn, ACCOnOffBtnInv (cancel)
     violation |= !controls_allowed && (GET_BIT(msg, 61U) || !(GET_BIT(msg, 45U)));  // Signals: ACCResumeBtn, ACCResumeBtnInv (resume)
+  }
+
+  // FSM0 from OP may report ACC enabled only while the ECM is engaged, so OP can never engage ACC by itself.
+  if (addr == VOLVO_EUCD_FSM0) {
+    bool acc_enabled = (msg->data[2] & 0x04U) != 0U;
+    violation |= acc_enabled && !cruise_engaged_prev;
   }
 
   // Safety check for Lane Keep Assist action.
@@ -125,6 +209,40 @@ static bool volvo_eucd_tx_hook(const CANPacket_t *msg) {
     }
   }
 
+  // EngineData to the camera showing ACC standby with the ECM engaged: OP's stop, it sends the ECM's FSM1/FSM3
+  if ((addr == VOLVO_EUCD_EngineData) && (msg->bus == VOLVO_EUCD_PARTY_BUS)) {
+    const bool shows_standby = (((unsigned int)msg->data[4] >> 4) & 0x3U) == 0x2U;
+    if (shows_standby && cruise_engaged_prev && controls_allowed) {
+      volvo_eucd_op_owns_ecm_fresh = VOLVO_EUCD_OP_OWNS_ECM_FRAMES;
+    }
+  }
+
+  // Longitudinal control: gate on controls_allowed + range check.
+  // check_relay=false lets stock FSM3 flow cam->main; OP overlays only when long-active.
+  if (addr == VOLVO_EUCD_FSM3) {
+    int raw_accel = (int)msg->data[1] - 126;
+    // When controls are not allowed, only the inactive (neutral) accel is permitted so OP
+    // can relay stock FSM3 at 50Hz without faulting the ECU. When controls are allowed,
+    // enforce the standard accel range.
+    // The camera's own frame (its hard brake below the limit) may go back unchanged while OP's long is allowed.
+    const bool cam_frame = get_longitudinal_allowed() && volvo_eucd_cam_frames_match(&volvo_eucd_cam_fsm3, msg);
+    bool accel_violation;
+    if (controls_allowed) {
+      accel_violation = longitudinal_accel_checks(raw_accel, VOLVO_EUCD_LONG_LIMITS) && !cam_frame;
+    } else {
+      accel_violation = raw_accel != VOLVO_EUCD_LONG_LIMITS.inactive_accel;
+    }
+    if (accel_violation) {
+      violation = true;
+    }
+  }
+
+  // FSM4 brake request only with OP's long allowed, or the camera's own frame unchanged (route 807)
+  if (addr == VOLVO_EUCD_FSM4) {
+    const bool brake_request = (msg->data[5] & 0x40U) != 0U;
+    violation |= brake_request && !get_longitudinal_allowed() && !volvo_eucd_cam_frames_match(&volvo_eucd_cam_fsm4, msg);
+  }
+
   if (violation) {
     tx = false;
   }
@@ -132,12 +250,47 @@ static bool volvo_eucd_tx_hook(const CANPacket_t *msg) {
   return tx;
 }
 
+static bool volvo_eucd_fwd_hook(int bus_num, int addr) {
+  bool block_msg = false;
+  // Camera FSM1/FSM3 blocked while OP controls; on the gas they go to the ECM, except in OP's stop (OP sends no accel)
+  const bool op_owns_ecm = volvo_eucd_op_owns_ecm_fresh > 0;
+  if (((unsigned int)bus_num == VOLVO_EUCD_PARTY_BUS) && controls_allowed && (!gas_pressed || op_owns_ecm)) {
+    if (((unsigned int)addr == VOLVO_EUCD_FSM1) || ((unsigned int)addr == VOLVO_EUCD_FSM3)) {
+      block_msg = true;
+    }
+  }
+  // FSM0 never forwarded main->cam (check_relay on the cam bus would trip on the camera's own FSM0)
+  if (((unsigned int)bus_num == VOLVO_EUCD_MAIN_BUS) && ((unsigned int)addr == VOLVO_EUCD_FSM0)) {
+    block_msg = true;
+  }
+  return block_msg;
+}
+
 static safety_config volvo_eucd_init(uint16_t param) {
   (void)param;
+  volvo_eucd_cam_frames_clear(&volvo_eucd_cam_fsm3);
+  volvo_eucd_cam_frames_clear(&volvo_eucd_cam_fsm4);
+  volvo_eucd_op_owns_ecm_fresh = 0;
   static const CanMsg VOLVO_EUCD_TX_MSGS[] = {
     {VOLVO_EUCD_CCButtons, VOLVO_EUCD_MAIN_BUS,  8, .check_relay = false},
+    // relayed by OP with Set to re-engage the camera's ACC; check_relay so the CEM's frame does not pass along with it
+    {VOLVO_EUCD_CCButtons, VOLVO_EUCD_PARTY_BUS, 8, .check_relay = true},
     {VOLVO_EUCD_PSCM1,     VOLVO_EUCD_PARTY_BUS, 8, .check_relay = true},  // OP replaces stock steering servo state
+    // car -> camera, relayed by OP
+    {VOLVO_EUCD_BRAKE_LEVEL,   VOLVO_EUCD_PARTY_BUS, 8, .check_relay = true},
+    {VOLVO_EUCD_BRAKE_ACK,     VOLVO_EUCD_PARTY_BUS, 8, .check_relay = true},
+    {VOLVO_EUCD_WHEELSPEED1,   VOLVO_EUCD_PARTY_BUS, 8, .check_relay = true},
+    {VOLVO_EUCD_BRAKE_REQ_ACK, VOLVO_EUCD_PARTY_BUS, 8, .check_relay = true},
+    {VOLVO_EUCD_BRAKE_HOLD,    VOLVO_EUCD_PARTY_BUS, 8, .check_relay = true},
+    {VOLVO_EUCD_ACC_HOLD,      VOLVO_EUCD_PARTY_BUS, 8, .check_relay = true},
+    {VOLVO_EUCD_EngineData,    VOLVO_EUCD_PARTY_BUS, 8, .check_relay = true},  // camera sees ACC standby in OP's no-target stop
     {VOLVO_EUCD_FSM2,      VOLVO_EUCD_MAIN_BUS,  8, .check_relay = true},  // OP replaces stock LKA command
+    // FSM1/FSM3: camera's pass through while OP does not control (relay delay faults the ECM)
+    {VOLVO_EUCD_FSM1,      VOLVO_EUCD_MAIN_BUS,  8, .check_relay = false},
+    {VOLVO_EUCD_FSM3,      VOLVO_EUCD_MAIN_BUS,  8, .check_relay = false},
+    // camera -> car, relayed by OP
+    {VOLVO_EUCD_FSM4,      VOLVO_EUCD_MAIN_BUS,  8, .check_relay = true},
+    {VOLVO_EUCD_FSM0,      VOLVO_EUCD_MAIN_BUS,  8, .check_relay = true},
   };
 
   // TODO: add counters
