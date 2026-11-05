@@ -33,6 +33,8 @@ class CarStateEUCD(CarStateBase):
     self.eucd_full_stop_standstill = False
     self.eucd_downhill = False  # set by the carcontroller
     self.eucd_ecm_standstill_ready = False
+    self.eucd_lka_on = False  # the driver's LKA on/off, always on lateral follows it
+    self.eucd_lka_state_prev: bool | None = None
     self.dashboard_limit = LimitTracker()
 
   def update(self, can_parsers) -> structs.CarState:
@@ -143,6 +145,13 @@ class CarStateEUCD(CarStateBase):
     driver_resume = bool(pt_cp.vl["CCButtons"]["ACCResumeBtn"]) and not pt_cp.vl["CCButtons"]["ACCResumeBtnInv"]
     button_events.extend(create_button_events(driver_resume, self.eucd_driver_resume, {True: ButtonType.resumeCruise}))
     self.eucd_driver_resume = driver_resume
+    # LKA button: no own bit, each press flips LKA_State (route 8a8)
+    lka_state = bool(pt_cp.vl["CCButtons"]["LKA_State"])
+    if self.eucd_lka_state_prev is not None and lka_state != self.eucd_lka_state_prev:
+      button_events += [structs.CarState.ButtonEvent(pressed=True, type=ButtonType.lkas),
+                        structs.CarState.ButtonEvent(pressed=False, type=ButtonType.lkas)]
+    self.eucd_lka_state_prev = lka_state
+    self.eucd_lka_on = lka_state
     ret.buttonEvents = button_events
 
     # lock info

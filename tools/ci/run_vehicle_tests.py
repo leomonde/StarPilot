@@ -179,6 +179,7 @@ AOL_LIFECYCLE_TARGETS = (
   "openpilot/starpilot/car/toyota/tests/test_legacy_advert_native.py",
   "openpilot/starpilot/car/toyota/tests/test_legacy_advert_lateral.py",
   "openpilot/starpilot/car/nissan/tests/test_aol.py",
+  "openpilot/starpilot/car/volvo/tests/test_aol.py",
   "openpilot/starpilot/aol/tests/test_volkswagen.py",
   "openpilot/starpilot/aol/tests/test_volkswagen_saved_intent.py",
   "openpilot/starpilot/aol/tests/test_mqb_actual_callers.py",

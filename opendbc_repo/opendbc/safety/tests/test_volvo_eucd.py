@@ -13,6 +13,12 @@ VOLVO_MAIN_BUS = 0
 VOLVO_PARTY_BUS = 2
 
 
+AOL = 32
+LATERAL = 1
+LONGITUDINAL = 2
+DRIVE, REVERSE = 3, 1
+
+
 class TestVolvoEUCD(common.CarSafetyTest, common.AngleSteeringSafetyTest):
   """Volvo EUCD: V60 2010-18, with openpilot longitudinal. Stock FSM1/FSM3 are relayed to the ECM at 50 Hz,
   overlaid with OP's accel/mode when active, so it has its own accel-range and fwd-hook coverage."""
@@ -258,6 +264,84 @@ class TestVolvoEUCD(common.CarSafetyTest, common.AngleSteeringSafetyTest):
         # When disabled, only a zero angle is allowed
         self.safety.set_controls_allowed(0)
         self.assertEqual(a == 0, self._tx(self._angle_cmd_msg(a, False)))
+
+
+class TestVolvoEUCDAol(unittest.TestCase):
+  """The optional AOL profile: the vehicle's states grant, the host's request only narrows."""
+
+  def setUp(self):
+    self.packer = CANPackerSafety("volvo_v60_2015_pt")
+    self.safety = libsafety_py.libsafety
+    self.safety.set_alternative_experience(AOL)
+    self.assertEqual(0, self.safety.set_safety_hooks(CarParams.SafetyModel.volvo, VolvoSafetyFlags.EUCD.value))
+    self.safety.init_tests()
+    self.time = 1000
+    self.safety.set_timer(self.time)
+    self.safety.set_aol_test_heartbeat(True)
+
+  def tearDown(self):
+    self.safety.set_alternative_experience(0)
+
+  def _rx(self, name, bus, values):
+    return self.safety.safety_rx_hook(self.packer.make_can_msg_safety(name, bus, values))
+
+  def _healthy(self, *, main=False, lka=False, gear=DRIVE, engaged=False):
+    # every required RX within its bound; the request itself is renewed last
+    self.time += 20000
+    self.safety.set_timer(self.time)
+    self._rx("AccPedal", 0, {"AccPedal": 0})
+    self._rx("FSM0", 2, {"ACC_Available": int(main)})
+    self._rx("EngineData", 0, {"ACC_State_ECM": 3 if engaged else 2})
+    self._rx("CCButtons", 0, {"LKA_State": int(lka), "ACCOnOffBtnInv": 1, "ACCResumeBtnInv": 1})
+    self._rx("VehicleSpeed1", 0, {"VehicleSpeed": 40})
+    self._rx("Brake_Info", 0, {"BrakePedal": 0})
+    self._rx("PSCM1", 0, {"SteeringAngleServo": 0})
+    self._rx("GearSelector", 0, {"GearLever": gear})
+
+  def _permission(self, request=LATERAL | LONGITUDINAL, **state):
+    self._healthy(**state)
+    self.safety.aol_set_host_request(request)
+    return self.safety.aol_get_permission_mask()
+
+  def test_lateral_needs_the_lka_or_the_acc_main(self):
+    self.assertEqual(0, self._permission(request=LATERAL))
+    self.assertEqual(LATERAL, self._permission(request=LATERAL, main=True))
+    self.assertEqual(LATERAL, self._permission(request=LATERAL, lka=True))
+    self.assertEqual(0, self._permission(request=LATERAL))
+
+  def test_host_request_only_narrows(self):
+    self.assertEqual(0, self._permission(request=0, main=True, lka=True))
+    self.assertEqual(0, self._permission(request=LONGITUDINAL, main=True, lka=True))
+
+  def test_only_in_drive(self):
+    self.assertEqual(0, self._permission(request=LATERAL, main=True, gear=REVERSE))
+    self.assertEqual(LATERAL, self._permission(request=LATERAL, main=True))
+
+  def test_stale_gear_withdraws(self):
+    self.assertEqual(LATERAL, self._permission(request=LATERAL, main=True))
+    self.safety.set_timer(self.time + 300001)
+    self.assertEqual(0, self.safety.aol_get_permission_mask())
+
+  def test_longitudinal_needs_the_ecm_engaged(self):
+    self.assertEqual(LATERAL, self._permission(main=True))
+    self.assertEqual(LATERAL | LONGITUDINAL, self._permission(main=True, engaged=True))
+
+  def test_stock_frames_do_not_depend_on_the_host_request(self):
+    # The camera's frames are blocked from the ECM while engaged, so OP's relay must keep passing without an AOL request
+    self._healthy(main=True, engaged=True)
+    self.safety.set_controls_allowed(True)
+    self.assertEqual(0, self.safety.aol_get_permission_mask())
+    self.assertEqual(-1, self.safety.safety_fwd_hook(VOLVO_PARTY_BUS, 0x270))
+    fsm3 = self.packer.make_can_msg_safety("FSM3", VOLVO_MAIN_BUS, {"ACC_AccelerationRequest": 1.0, "ACC_Check": 0})
+    self.assertTrue(self.safety.safety_tx_hook(fsm3))
+
+  def test_steering_uses_the_lateral_axis(self):
+    angle = self.packer.make_can_msg_safety("FSM2", VOLVO_MAIN_BUS, {"LKAAngleReq": 0.1, "LKASteerDirection": 2})
+    self._healthy()
+    self.safety.aol_set_host_request(LATERAL)
+    self.assertFalse(self.safety.safety_tx_hook(angle))
+    self.assertEqual(LATERAL, self._permission(request=LATERAL, main=True))
+    self.assertTrue(self.safety.safety_tx_hook(angle))
 
 
 if __name__ == "__main__":

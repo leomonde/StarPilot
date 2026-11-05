@@ -1,5 +1,6 @@
 #pragma once
 #include "opendbc/safety/declarations.h"
+#include "opendbc/safety/modes/volvo_eucd_aol.h"
 
 // EUCD (V60 2010-18). Bus 0 is the car, bus 2 the forward camera; bus 1 is a radar-only aux bus, not monitored.
 #define VOLVO_EUCD_MAIN_BUS  0U
@@ -84,6 +85,11 @@ static void volvo_eucd_rx_hook(const CANPacket_t *msg) {
       gas_pressed = gas_raw >= 100U;
     }
 
+    if (addr == VOLVO_EUCD_CCButtons) {
+      // Signal: LKA_State, the driver's LKA on/off (always on lateral)
+      volvo_eucd_aol_lka_on = GET_BIT(msg, 18U);
+    }
+
     if (addr == VOLVO_EUCD_Brake_Info) {
       // Signal: BrakePedal
       brake_pressed = (((unsigned int)msg->data[2] & 0x0CU) >> 2U) == 2U;
@@ -107,7 +113,7 @@ static void volvo_eucd_rx_hook(const CANPacket_t *msg) {
     }
   } else if (msg->bus == VOLVO_EUCD_PARTY_BUS) {
     if (msg->addr == VOLVO_EUCD_FSM0) {
-      // Signal: ACC_Available, the camera's ACC main on
+      // Signal: ACC_Available, the camera's ACC main on (always on lateral)
       acc_main_on = GET_BIT(msg, 17U);
     }
   } else {
@@ -117,6 +123,7 @@ static void volvo_eucd_rx_hook(const CANPacket_t *msg) {
 
 // Frames outside the RX checks: the camera's FSM3/FSM4 as it sends them
 static void volvo_eucd_optional_rx(const CANPacket_t *msg) {
+  volvo_eucd_aol_observe(msg);
   if (msg->bus == VOLVO_EUCD_PARTY_BUS) {
     if (msg->addr == VOLVO_EUCD_FSM3) {
       volvo_eucd_cam_frames_store(&volvo_eucd_cam_fsm3, msg);
@@ -181,6 +188,10 @@ static bool volvo_eucd_tx_hook(const CANPacket_t *msg) {
   bool violation = false;
   const unsigned int addr = msg->addr;
 
+  // Only ACC engaged: lateral has its own AOL axis, while a late host request must not drop the camera's
+  // frames on their way to the ECM, as the fwd hook blocks them on this same condition.
+  const bool long_allowed = controls_allowed && !gas_pressed_prev;
+
   // CC buttons to the car; the camera bus gets every CEM frame relayed, which cannot engage the ECM
   if ((addr == VOLVO_EUCD_CCButtons) && (msg->bus == VOLVO_EUCD_MAIN_BUS)) {
     // Violation if resume button is pressed while controls not allowed, or
@@ -225,10 +236,11 @@ static bool volvo_eucd_tx_hook(const CANPacket_t *msg) {
     // can relay stock FSM3 at 50Hz without faulting the ECU. When controls are allowed,
     // enforce the standard accel range.
     // The camera's own frame (its hard brake below the limit) may go back unchanged while OP's long is allowed.
-    const bool cam_frame = get_longitudinal_allowed() && volvo_eucd_cam_frames_match(&volvo_eucd_cam_fsm3, msg);
+    const bool cam_frame = long_allowed && volvo_eucd_cam_frames_match(&volvo_eucd_cam_fsm3, msg);
     bool accel_violation;
     if (controls_allowed) {
-      accel_violation = longitudinal_accel_checks(raw_accel, VOLVO_EUCD_LONG_LIMITS) && !cam_frame;
+      const bool accel_valid = long_allowed && !safety_max_limit_check(raw_accel, VOLVO_EUCD_LONG_LIMITS.max_accel, VOLVO_EUCD_LONG_LIMITS.min_accel);
+      accel_violation = !accel_valid && (raw_accel != VOLVO_EUCD_LONG_LIMITS.inactive_accel) && !cam_frame;
     } else {
       accel_violation = raw_accel != VOLVO_EUCD_LONG_LIMITS.inactive_accel;
     }
@@ -240,7 +252,7 @@ static bool volvo_eucd_tx_hook(const CANPacket_t *msg) {
   // FSM4 brake request only with OP's long allowed, or the camera's own frame unchanged (route 807)
   if (addr == VOLVO_EUCD_FSM4) {
     const bool brake_request = (msg->data[5] & 0x40U) != 0U;
-    violation |= brake_request && !get_longitudinal_allowed() && !volvo_eucd_cam_frames_match(&volvo_eucd_cam_fsm4, msg);
+    violation |= brake_request && !long_allowed && !volvo_eucd_cam_frames_match(&volvo_eucd_cam_fsm4, msg);
   }
 
   if (violation) {
@@ -271,6 +283,17 @@ static safety_config volvo_eucd_init(uint16_t param) {
   volvo_eucd_cam_frames_clear(&volvo_eucd_cam_fsm3);
   volvo_eucd_cam_frames_clear(&volvo_eucd_cam_fsm4);
   volvo_eucd_op_owns_ecm_fresh = 0;
+  volvo_eucd_aol_reset();
+  volvo_eucd_aol_enabled = (unsigned int)alternative_experience == 32U;
+  if (volvo_eucd_aol_enabled) {
+    static const AolSafetyPolicy policy = {
+      .reset = volvo_eucd_aol_reset,
+      .request_mask = volvo_eucd_aol_request,
+      .permission_mask = volvo_eucd_aol_permission,
+      .rx_invalid = volvo_eucd_aol_reset,
+    };
+    aol_policy = &policy;
+  }
   static const CanMsg VOLVO_EUCD_TX_MSGS[] = {
     {VOLVO_EUCD_CCButtons, VOLVO_EUCD_MAIN_BUS,  8, .check_relay = false},
     // relayed by OP with Set to re-engage the camera's ACC; check_relay so the CEM's frame does not pass along with it

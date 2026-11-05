@@ -271,3 +271,14 @@ def test_longitudinal_tx_is_50hz_and_keeps_the_relays():
     sent += [s[0] for s in cc.update(control(False), cs, i * 10_000_000)[1]]
   assert sent.count(0x270) == sent.count(0x260) == 5  # FSM3, FSM1
   assert sent.count(0x127) == 10  # CEM frames relayed to the camera
+
+
+def test_lka_press_events(car):
+  packer = CANPacker(DBC_NAME)
+  cs, _ = car
+  presses = []
+  for t, lka in enumerate((1, 1, 0, 0, 1)):
+    ret = step(car, 1_000_000 * (t + 1), [CanData(*packer.make_can_msg("CCButtons", 0, {"LKA_State": lka}))])
+    presses.append(sum(be.type == ButtonType.lkas and be.pressed for be in ret.buttonEvents))
+    assert cs.eucd_lka_on == bool(lka)
+  assert presses == [0, 0, 1, 0, 1]  # one press per LKA_State flip, none at start
