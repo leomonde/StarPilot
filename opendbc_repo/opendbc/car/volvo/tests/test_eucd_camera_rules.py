@@ -34,13 +34,26 @@ def test_mild_camera_brake_ignored():
   assert not cc.eucd_cam_brake_honor
 
 
+def test_camera_brake_released_when_only_its_leftover_is_left():
+  cc = controller(cam_brake=True)
+  assert cc._eucd_camera_brake(0.1, HARD) == HARD
+  assert cc._eucd_camera_brake(1.9, 0.96, leftover=True) == 1.9  # target gone, camera asks no brake (route 8bd)
+  assert not cc.eucd_cam_brake_honor
+
+
 def test_op_braking_more_is_never_limited():
   cc = controller(cam_brake=True)
   assert cc._eucd_camera_brake(HARD - 0.5, HARD) == HARD - 0.5
 
 
-def fsm3(mode):
-  return SimpleNamespace(eucd_stock_FSM3={"ACC_Mode": mode})
+def fsm3(mode, distance=50, cam_accel=-1.0):
+  return SimpleNamespace(eucd_stock_FSM3={"ACC_Mode": mode, "ACC_AccelerationRequest": cam_accel}, eucd_acc_distance=distance)
+
+
+@pytest.mark.parametrize("op_mode", [LongMode.COAST, LongMode.DRIVE])
+def test_fsm3_leaves_the_camera_brake_leftover(op_mode):
+  assert CarController._eucd_fsm3_mode(fsm3(LongMode.BRAKE, distance=255, cam_accel=0.96), op_mode) == op_mode
+  assert CarController._eucd_fsm3_mode(fsm3(LongMode.BRAKE, distance=255, cam_accel=-0.5), op_mode) == LongMode.BRAKE
 
 
 @pytest.mark.parametrize("op_mode", [LongMode.BRAKE, LongMode.COAST, LongMode.DRIVE])
