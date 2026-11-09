@@ -6,7 +6,7 @@ import pytest
 from opendbc.car import structs
 from opendbc.car.volvo.interface import CarInterface
 from opendbc.car.volvo.values import CAR
-from openpilot.starpilot.aol.intent import AOL_TOGGLE, read_settings
+from openpilot.starpilot.aol.intent import AOL_TOGGLE, ButtonType, read_settings
 from openpilot.starpilot.car.volvo import aol
 
 
@@ -67,10 +67,13 @@ def intent(lkas_action):
   return aol.VolvoEucdCardIntent(replace(read_settings(FakeParams()), lkas_action=lkas_action))
 
 
-def step(card, *, available=False, lka=False):
+def step(card, *, available=False, lka=False, enabled=False, press=False):
   card.observe_vehicle_state(SimpleNamespace(eucd_lka_on=lka))
   state = structs.CarState(canValid=True, gearShifter=structs.CarState.GearShifter.drive)
   state.cruiseState.available = available
+  state.cruiseState.enabled = enabled
+  if press:
+    state.buttonEvents = [structs.CarState.ButtonEvent(type=ButtonType.lkas, pressed=True)]
   card.update(state.as_reader(), fault_active=False, native_rejection_ns=0, now_ns=1, standard_enabled=False)
   return card.allowed_latch
 
@@ -80,6 +83,36 @@ def test_lkas_mapped_follows_the_lka_not_the_cruise():
   assert step(card, available=False, lka=True)
   assert not step(card, available=True, lka=False)
   assert step(card, available=True, lka=True)
+
+
+def test_lka_pause_ends_with_the_next_engage():
+  card = intent(AOL_TOGGLE)
+  common = {'available': True}
+  step(card, enabled=True, lka=True, **common)
+  assert not card.pause_lateral
+  step(card, enabled=True, lka=False, press=True, **common)  # LKA off while engaged pauses steering
+  assert card.pause_lateral
+  step(card, enabled=True, lka=False, **common)
+  assert card.pause_lateral
+  step(card, enabled=False, lka=False, **common)  # still paused with the ACC off
+  assert card.pause_lateral
+  step(card, enabled=True, lka=False, **common)  # the next engage steers again
+  assert not card.pause_lateral
+
+
+def test_lka_back_on_resumes_a_paused_steering():
+  card = intent(AOL_TOGGLE)
+  step(card, available=True, enabled=True, lka=True)
+  step(card, available=True, enabled=True, lka=False, press=True)
+  assert step(card, available=True, enabled=True, lka=True, press=True)
+  assert not card.pause_lateral
+
+
+def test_lka_off_while_not_engaged_is_no_pause():
+  card = intent(AOL_TOGGLE)
+  step(card, available=True, lka=True)
+  assert not step(card, available=True, lka=False, press=True)
+  assert not card.pause_lateral
 
 
 def test_lkas_unmapped_follows_the_acc_main():

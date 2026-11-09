@@ -13,6 +13,11 @@ from opendbc.car.volvo.eucd_full_stop import EucdFullStop
 from opendbc.car.volvo.eucd_params import CarControllerEUCDParams, LongMode, SteerDirection
 
 
+def eucd_cam_brake_leftover(CS) -> bool:
+  """Camera still in brake mode with no target and no braking asked: its brake kept 6 s after a false target (route 8bd, 193.6 s)."""
+  return CS.eucd_acc_distance >= 255 and float(CS.eucd_stock_FSM3["ACC_AccelerationRequest"]) >= 0.
+
+
 class CarControllerEUCD(CarControllerBase):
   def __init__(self, dbc_names, CP):
     super().__init__(dbc_names, CP)
@@ -256,7 +261,7 @@ class CarControllerEUCD(CarControllerBase):
     accel = self._eucd_jerk_limit(accel, self.eucd_accel)
     cam_accel = float(CS.eucd_stock_FSM3["ACC_AccelerationRequest"])
     accel = self._eucd_camera_accel_cap(CS, accel, cam_accel)
-    accel = self._eucd_camera_brake(accel, cam_accel)
+    accel = self._eucd_camera_brake(accel, cam_accel, eucd_cam_brake_leftover(CS))
     brake_offset = self._eucd_slope_brake_offset(CC)
 
     if self.eucd_cam_brake_honor:
@@ -283,9 +288,9 @@ class CarControllerEUCD(CarControllerBase):
       return accel
     return min(accel, max(cam_accel, CCP.EUCD_CAMERA_ACCEL_CAP_FLOOR))
 
-  def _eucd_camera_brake(self, accel, cam_accel):
-    """Follow the camera's hard brake, latched until it releases."""
-    if not self.eucd_cam_brake:
+  def _eucd_camera_brake(self, accel, cam_accel, leftover=False):
+    """Follow the camera's hard brake, latched until it releases or only its leftover brake state is left."""
+    if not self.eucd_cam_brake or leftover:
       self.eucd_cam_brake_honor = False
     elif cam_accel < CarControllerEUCDParams.EUCD_CAMERA_BRAKE_HONOR_BELOW:
       self.eucd_cam_brake_honor = True
@@ -296,7 +301,7 @@ class CarControllerEUCD(CarControllerBase):
     """FSM3 mode: 0 when the camera is in it, else OP's."""
     if long_mode is None:
       return None
-    if int(CS.eucd_stock_FSM3["ACC_Mode"]) == LongMode.BRAKE:
+    if int(CS.eucd_stock_FSM3["ACC_Mode"]) == LongMode.BRAKE and not eucd_cam_brake_leftover(CS):
       return LongMode.BRAKE
     return long_mode
 

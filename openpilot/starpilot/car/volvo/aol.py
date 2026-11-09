@@ -89,6 +89,7 @@ class VolvoEucdCardIntent(AolCardIntent):
 
   def __init__(self, settings):
     self.lka_on = False
+    self.cruise_enabled = False
     super().__init__(settings, explicit_latch=True)
 
   def observe_vehicle_state(self, car_state):
@@ -110,9 +111,19 @@ class VolvoEucdCardIntent(AolCardIntent):
     for event in CS.buttonEvents:
       if event.type != ButtonType.lkas:
         events.append(structs.CarState.ButtonEvent(**event.to_dict()))
+      elif lka_mode and event.pressed:
+        # Each press flips the LKA, already read: turning it off while engaged pauses steering, turning it on resumes
+        if CS.cruiseState.enabled or self.pause_lateral:
+          self.pause_lateral = not self.lka_on
+          if self.pause_lateral:
+            self._withdraw_full_engagement()
       elif not lka_mode and event.pressed and healthy:
         self._perform(saved.lkas_action)
     state.buttonEvents = events
+    # A pause by the LKA ends with the next ACC engage
+    if lka_mode and CS.cruiseState.enabled and not self.cruise_enabled:
+      self.pause_lateral = False
+    self.cruise_enabled = bool(CS.cruiseState.enabled)
     super().update(state.as_reader(), **kwargs)
 
     # The car's own state: a press that flips it has no separate latch that could disagree with the panda's
