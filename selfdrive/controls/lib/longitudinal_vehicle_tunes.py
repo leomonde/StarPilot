@@ -204,9 +204,12 @@ def use_stopped_lead_position(CP):
 
 
 def use_model_lead_filter_sync(CP):
+  # Volvo V60: stale filter braked -1 m/s^2 at 53 m (route 8c8, 622 s)
   return (
-    getattr(CP, "brand", "") == "toyota" and
-    str(getattr(CP, "carFingerprint", "")) == "TOYOTA_COROLLA_TSS2"
+    (getattr(CP, "brand", "") == "toyota" and
+     str(getattr(CP, "carFingerprint", "")) == "TOYOTA_COROLLA_TSS2") or
+    (getattr(CP, "brand", "") == "volvo" and
+     str(getattr(CP, "carFingerprint", "")) == "VOLVO_V60")
   )
 
 
