@@ -377,6 +377,11 @@ class StarPilotCard:
     if ford_lateral_session_started:
       self.pause_lateral = False
 
+    # Volvo V60, LKAS button on AOL: a pause by the LKA ends with the next ACC engage
+    if (getattr(self.CP, "carFingerprint", None) == "VOLVO_V60" and starpilot_toggles.always_on_lateral_lkas and
+        carState.cruiseState.enabled and not self.prev_cruise_enabled):
+      self.pause_lateral = False
+
     if self.g70_main_cruise_aol_pending:
       if cruise_available_changed:
         self.always_on_lateral_allowed = carState.cruiseState.available

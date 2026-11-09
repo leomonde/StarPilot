@@ -611,6 +611,29 @@ def test_hyundai_lkas_button_can_start_aol_before_normal_engagement(monkeypatch,
   assert ret.pauseLateral is False
 
 
+def test_volvo_lka_pause_ends_with_the_next_engage(monkeypatch, tmp_path):
+  monkeypatch.setattr(spc, "Params", FakeParams)
+  monkeypatch.setattr(spc, "ERROR_LOGS_PATH", tmp_path)
+
+  card = spc.StarPilotCard(
+    SimpleNamespace(brand="volvo", carFingerprint="VOLVO_V60"),
+    SimpleNamespace(alternativeExperience=spc.ALTERNATIVE_EXPERIENCE.ALWAYS_ON_LATERAL),
+  )
+  sm = make_sm()
+  toggles = make_toggles(always_on_lateral=True, always_on_lateral_lkas=True, lkas_allowed_for_aol=True)
+  press = [SimpleNamespace(type=spc.ButtonType.lkas, pressed=True)]
+
+  def step(enabled, lka_on, button_events=None):
+    car_state = make_car_state(available=True, enabled=enabled, button_events=button_events)
+    return card.update(car_state, SimpleNamespace(distancePressed=False, alwaysOnLateralAllowed=lka_on), sm, toggles)
+
+  assert step(True, True).pauseLateral is False
+  assert step(True, False, press).pauseLateral is True  # LKA off while engaged pauses steering
+  assert step(True, False).pauseLateral is True
+  assert step(False, False).pauseLateral is True  # still paused with the ACC off
+  assert step(True, False).pauseLateral is False  # the next engage steers again
+
+
 def test_volvo_aol_follows_the_car_lka_state(monkeypatch, tmp_path):
   monkeypatch.setattr(spc, "Params", FakeParams)
   monkeypatch.setattr(spc, "ERROR_LOGS_PATH", tmp_path)
