@@ -120,3 +120,19 @@ def test_lkas_unmapped_follows_the_acc_main():
   assert not step(card, available=False, lka=True)
   assert step(card, available=True, lka=False)
   assert not step(card, available=False, lka=False)
+
+
+def test_only_the_v60_can2_interrupt_rate_is_not_blocking():
+  # The ESR keeps the panda's CAN2 interrupt-rate fault on (routes 000008d2, 00000004)
+  from openpilot.cereal import log
+  from openpilot.starpilot.aol.panda_faults import blocking_fault_list, blocking_fault_mask
+  Fault = log.PandaState.FaultType
+  for alternative in (0, 32):
+    cp = params(alternative=alternative)
+    assert not blocking_fault_list([Fault.interruptRateCan2], cp)
+    assert not blocking_fault_mask(1 << 3, cp)
+    assert blocking_fault_list([Fault.interruptRateCan1], cp)
+    assert blocking_fault_list([Fault.interruptRateCan2, Fault.relayMalfunction], cp)
+    assert blocking_fault_mask((1 << 3) | (1 << 2), cp)
+  assert blocking_fault_list([Fault.interruptRateCan2], params(CAR.VOLVO_V40))
+  assert blocking_fault_list([Fault.interruptRateCan2], params(CAR.POLESTAR_2))

@@ -29,6 +29,11 @@ def _diagnostic_mask(cp):
       return (1 << 3) if (int(cp.flags) == int(recorded_flags) and
                          len(cp.safetyConfigs) == 1 and int(cp.safetyConfigs[0].safetyParam) == 0xC02 and cp.alternativeExperience == 32 and
                          qualified(cp, marked_only=True)) else 0
+    if cp.brand == 'volvo':
+      # Volvo V60 (EUCD): the Delphi ESR on bus 1 always reports the CAN2 interrupt-rate diagnostic, in v6 too
+      # (route 000008d2), which blocked every engagement (route 00000004). Only that bit is exempt.
+      from openpilot.starpilot.car.volvo.aol import qualified as volvo_qualified
+      return (1 << 3) if volvo_qualified(cp) else 0
     from opendbc.car.gm.aol import qualified_gm
     from opendbc.car.gm.values import CAR, is_volt_sdgm_profile, is_bolt_present_no_acc_pedal_profile
     if cp.brand != 'gm' or len(cp.safetyConfigs) != 1:
