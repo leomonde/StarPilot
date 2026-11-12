@@ -70,9 +70,6 @@ class RadarInterface(RadarInterfaceBase):
         self.pts[addr].dRel = rng * cos(angle_rad)
         self.pts[addr].yRel = -rng * sin(angle_rad)
         self.pts[addr].vRel = cpt["CAN_TX_TRACK_RANGE_RATE"]
-        self.pts[addr].aRel = cpt["CAN_TX_TRACK_RANGE_ACCEL"]
-        self.pts[addr].yvRel = float("nan")
-        self.pts[addr].measured = True
       elif self.valid_cnt[addr] < MIN_VALID_CNT and addr in self.pts:
         del self.pts[addr]
 

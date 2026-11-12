@@ -282,3 +282,21 @@ def test_lka_press_events(car):
     presses.append(sum(be.type == ButtonType.lkas and be.pressed for be in ret.buttonEvents))
     assert cs.eucd_lka_on == bool(lka)
   assert presses == [0, 0, 1, 0, 1]  # one press per LKA_State flip, none at start
+
+
+def test_radar_publishes_an_esr_track():
+  # card crashed on the first valid track: aRel/yvRel/measured are deprecated in the v7 RadarPoint
+  from opendbc.car.volvo.eucd_params import CANBUS
+  from opendbc.car.volvo.radar_interface import DELPHI_ESR_TRACK_NAMES, RadarInterface
+  ri = RadarInterface(params())
+  packer = CANPacker(DBC[CAR.VOLVO_V60][Bus.radar])
+  track = {"CAN_TX_TRACK_STATUS": 3, "CAN_TX_TRACK_RANGE": 40., "CAN_TX_TRACK_ANGLE": 0., "CAN_TX_TRACK_RANGE_RATE": -2.}
+  ret = None
+  for sweep in range(4):
+    frames = [CanData(*packer.make_can_msg(name, CANBUS.body, track if name == "Target1" else {})) for name in DELPHI_ESR_TRACK_NAMES]
+    ret = ri.update([(1_000_000_000 + sweep * 50_000_000, frames)])
+  assert ret is not None and len(ret.points) == 1
+  point = ret.points[0]
+  assert point.dRel == pytest.approx(40., abs=0.1)
+  assert point.yRel == pytest.approx(0., abs=0.1)
+  assert point.vRel == pytest.approx(-2., abs=0.01)
