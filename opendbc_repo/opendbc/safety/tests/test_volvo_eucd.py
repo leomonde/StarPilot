@@ -332,6 +332,17 @@ class TestVolvoEUCDAol(unittest.TestCase):
     self.assertEqual(LATERAL, self._permission(main=True))
     self.assertEqual(LATERAL | LONGITUDINAL, self._permission(main=True, engaged=True))
 
+  def test_gas_override_keeps_the_longitudinal_permission(self):
+    # Gas is an override: the permission stays (route 0000000a), while OP's longitudinal frames stay blocked
+    self.assertEqual(LATERAL | LONGITUDINAL, self._permission(main=True, engaged=True))
+    self.safety.set_controls_allowed(True)
+    self._rx("AccPedal", 0, {"AccPedal": 20})
+    self._rx("AccPedal", 0, {"AccPedal": 20})
+    self.assertTrue(self.safety.get_gas_pressed_prev())
+    self.assertEqual(LATERAL | LONGITUDINAL, self.safety.aol_get_permission_mask())
+    brake = {"ACC_BrakeRequest": 1, "ACC_BrakeTarget": 12900, "Byte_5_b7": 1}
+    self.assertFalse(self.safety.safety_tx_hook(self.packer.make_can_msg_safety("FSM4", VOLVO_MAIN_BUS, brake)))
+
   def test_stock_frames_do_not_depend_on_the_host_request(self):
     # The camera's frames are blocked from the ECM while engaged, so OP's relay must keep passing without an AOL request
     self._healthy(main=True, engaged=True)

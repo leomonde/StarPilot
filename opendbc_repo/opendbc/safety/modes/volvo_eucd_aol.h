@@ -35,7 +35,10 @@ static uint8_t volvo_eucd_aol_permission(void) {
   if (drive && (acc_main_on || volvo_eucd_aol_lka_on)) {
     permission = request & 1U;
   }
-  if (drive && controls_allowed && !brake_pressed && !gas_pressed) {
+  // The driver's gas is an override, as in stock openpilot: OP's longitudinal frames stay blocked by the tx hook's
+  // !gas_pressed_prev, but the permission is kept, or the host takes the press as a lost axis and drops the AOL latch
+  // until a new baseline (route 0000000a, 47.8 s: pink frame for ~0.7 s after each gas release while steering).
+  if (drive && controls_allowed && !brake_pressed) {
     permission |= request & 2U;
   }
   return permission;
