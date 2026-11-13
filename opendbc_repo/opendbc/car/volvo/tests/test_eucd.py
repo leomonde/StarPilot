@@ -101,6 +101,17 @@ def test_gear_lever(gear, expected):
   assert cs.update(parsers).gearShifter == expected
 
 
+def test_gas_press_and_release_have_the_panda_hysteresis():
+  # A foot held at 10% flickered gas each frame (route 00000007): 10% presses, under 9% releases, as the panda
+  cs, parsers, _ = car_state()
+  t = 1_000_000_000
+  for pedal, pressed in ((9.9, False), (10, True), (9.9, True), (9, True), (8.9, False), (9.9, False), (10, True)):
+    t += 10_000_000
+    for parser in parsers.values():
+      parser.update([(t, required_frames(AccPedal={"AccPedal": pedal}))])
+    assert cs.update(parsers).gasPressed == pressed, pedal
+
+
 def control(lat_active, angle=0., cancel=False):
   cc = structs.CarControl()
   cc.latActive = lat_active

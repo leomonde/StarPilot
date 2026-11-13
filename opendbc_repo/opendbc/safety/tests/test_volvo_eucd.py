@@ -69,6 +69,12 @@ class TestVolvoEUCD(common.CarSafetyTest, common.AngleSteeringSafetyTest):
   def _user_gas_msg(self, gas):
     return self.packer.make_can_msg_safety("AccPedal", VOLVO_MAIN_BUS, {"AccPedal": 10 if gas else 0})
 
+  def test_gas_press_and_release_have_hysteresis(self):
+    # A foot held at 10% flickered gas each frame and OP's long with it (route 00000007): 10% presses, under 9% releases
+    for pedal, pressed in ((9.9, False), (10, True), (9.9, True), (9, True), (8.9, False), (9.9, False), (10, True)):
+      self._rx(self.packer.make_can_msg_safety("AccPedal", VOLVO_MAIN_BUS, {"AccPedal": pedal}))
+      self.assertEqual(pressed, self.safety.get_gas_pressed_prev(), f"{pedal=}")
+
   def test_ecm_acc_off_is_not_engaged(self):
     # EngineData ACC_State_ECM: 1 off, 2 standby, 3 engaged. Turning ACC off (On/Off in standby) gives 1,
     # which has bit 4 set like engaged (route 823); only 3 allows controls

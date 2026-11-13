@@ -7,6 +7,8 @@
 #define VOLVO_EUCD_PARTY_BUS 2U
 
 #define VOLVO_EUCD_AccPedal      0x020U  // RX, gas pedal
+#define VOLVO_EUCD_GAS_PRESS     100U    // AccPedal raw (0.1 %)
+#define VOLVO_EUCD_GAS_RELEASE   90U
 #define VOLVO_EUCD_FSM0          0x051U  // TX by OP, camera's relayed; ACC state
 #define VOLVO_EUCD_EngineData    0x12AU  // RX, ECM ACC state
 #define VOLVO_EUCD_VehicleSpeed1 0x148U  // RX, vehicle speed
@@ -82,7 +84,9 @@ static void volvo_eucd_rx_hook(const CANPacket_t *msg) {
     if (addr == VOLVO_EUCD_AccPedal) {
       // Signal: AccPedal
       unsigned int gas_raw = (((unsigned int)msg->data[2] & 0x03U) << 8) | (unsigned int)msg->data[3];
-      gas_pressed = gas_raw >= 100U;
+      // 10% to press, under 9% to release: a foot held at 10% flickered it each frame (route 00000007, 273.7 s),
+      // dropping and restoring OP's long out of step with the host, which ended the drive with controlsMismatch
+      gas_pressed = gas_raw >= (gas_pressed ? VOLVO_EUCD_GAS_RELEASE : VOLVO_EUCD_GAS_PRESS);
     }
 
     if (addr == VOLVO_EUCD_CCButtons) {

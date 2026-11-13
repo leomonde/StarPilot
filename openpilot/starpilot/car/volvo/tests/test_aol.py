@@ -115,6 +115,19 @@ def test_lka_off_while_not_engaged_is_no_pause():
   assert not card.pause_lateral
 
 
+def test_lka_off_engage_steers_with_the_latch_until_the_lka_pauses():
+  # Route 00000007, 296 s: LKA off and ACC engaged steered with the AOL latch off, so the frame was pink
+  card = intent(AOL_TOGGLE)
+  assert not step(card, available=True, lka=False)
+  assert step(card, available=True, enabled=True, lka=False)  # engaged: steering, latch on
+  assert not step(card, available=True, lka=False)  # ACC off with the LKA off: no AOL
+  assert step(card, available=True, enabled=True, lka=False)
+  step(card, available=True, enabled=True, lka=True, press=True)  # LKA on: still steering
+  assert step(card, available=True, enabled=True, lka=True)
+  assert not step(card, available=True, enabled=True, lka=False, press=True)  # LKA off pauses
+  assert card.pause_lateral
+
+
 def test_lkas_unmapped_follows_the_acc_main():
   card = intent(0)
   assert not step(card, available=False, lka=True)

@@ -34,6 +34,7 @@ class CarStateEUCD(CarStateBase):
     self.eucd_downhill = False  # set by the carcontroller
     self.eucd_ecm_standstill_ready = False
     self.eucd_lka_on = False  # the driver's LKA on/off, always on lateral follows it
+    self.eucd_gas_pressed = False
     self.eucd_lka_state_prev: bool | None = None
     self.dashboard_limit = LimitTracker()
 
@@ -49,7 +50,9 @@ class CarStateEUCD(CarStateBase):
     ret.standstill = ret.vEgoRaw < 0.1
 
     # gas pedal
-    ret.gasPressed = pt_cp.vl["AccPedal"]["AccPedal"] >= 10
+    # 10% to press, under 9% to release, as the panda: a foot held at 10% flickered it each frame (route 00000007)
+    self.eucd_gas_pressed = pt_cp.vl["AccPedal"]["AccPedal"] >= (9 if self.eucd_gas_pressed else 10)
+    ret.gasPressed = self.eucd_gas_pressed
 
     # brake pedal
     ret.brakePressed = pt_cp.vl["Brake_Info"]["BrakePedal"] == 2

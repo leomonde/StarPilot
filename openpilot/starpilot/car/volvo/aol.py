@@ -126,8 +126,11 @@ class VolvoEucdCardIntent(AolCardIntent):
     self.cruise_enabled = bool(CS.cruiseState.enabled)
     super().update(state.as_reader(), **kwargs)
 
-    # The car's own state: a press that flips it has no separate latch that could disagree with the panda's
-    desired = self.lka_on if lka_mode else bool(CS.cruiseState.available)
+    # The car's own state: a press that flips it has no separate latch that could disagree with the panda's.
+    # With the LKA off an ACC engage still steers until the LKA pauses it: the latch follows, so the frame shows it
+    # (route 00000007, 296 s: pink frame while OP steered).
+    engaged_steering = lka_mode and CS.cruiseState.enabled and not self.pause_lateral
+    desired = (self.lka_on or engaged_steering) if lka_mode else bool(CS.cruiseState.available)
     if not desired:
       if self.allowed_latch:
         self._record_latch_clear('vehicle_state_off')
