@@ -1,11 +1,12 @@
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
-import { Home, homeSummary, driveSummary } from "../web/js/home.js"
+import { Home, homeSummary, driveSummary, modelArc } from "../web/js/home.js"
 
 const absent = homeSummary({ status: "unavailable", snapshot: null }, { status: "stale", data: null },
   { status: "unavailable", data: null })
 assert.equal(absent.system.cpu, "Unavailable")
 assert.equal(absent.system.storage, "Unavailable")
+assert.equal(absent.system.recordingStorage, null)
 assert.equal(absent.model.health, "Unavailable")
 assert.equal(absent.software.update, "Unavailable")
 
@@ -22,7 +23,29 @@ const current = homeSummary({ status: "current", snapshot: { sampledAt: 1_700_00
 assert.equal(current.system.cpu, "22%")
 assert.equal(current.system.memory, "Unavailable")
 assert.equal(current.system.storage, "12.3 GiB / 64.0 GiB")
-assert.equal(current.model.variant, "Chestnut big")
+assert.equal(current.system.recordingStorage, null)
+const c3Snapshot = { sampledAt: 1_700_000_000, deviceType: "tici",
+  storage: { usedGiB: 20.6, totalGiB: 29.8, freeGiB: 7.6 },
+  recordingStorage: { usedGiB: 598, totalGiB: 916, freeGiB: 273 } }
+const storageSummary = (snapshot, status = "current") => homeSummary({ status, snapshot },
+  { status: "unavailable" }, { status: "unavailable" }).system
+const dualStorage = storageSummary(c3Snapshot)
+assert.equal(dualStorage.storage, "20.6 GiB / 29.8 GiB")
+assert.equal(dualStorage.storageLabel, "Internal storage")
+assert.equal(dualStorage.storageFree, "7.6 GiB")
+assert.deepEqual(dualStorage.recordingStorage, { usage: "598.0 GiB / 916.0 GiB", free: "273.0 GiB" })
+assert.equal(storageSummary({ ...c3Snapshot, recordingStorage: null }).recordingStorage, null)
+assert.equal(storageSummary(c3Snapshot, "stale").recordingStorage, null)
+for (const deviceType of ["tizi", "mici", "pc", undefined]) {
+  const summary = storageSummary({ ...c3Snapshot, deviceType })
+  assert.equal(summary.storageLabel, "Storage")
+  assert.equal(summary.storageFree, null)
+  assert.equal(summary.recordingStorage, null)
+}
+assert.match(Home.template, /v-if="summary.system.recordingStorage"/)
+assert.match(Home.template, /Recording drive:/)
+assert.match(Home.template, /summary.system.recordingStorage.free }} free/)
+assert.equal(current.model.variant, "Big")
 assert.equal(current.software.branch, "Unavailable")
 assert.equal(current.software.version, "StarPilot 0.11.2")
 assert.equal(current.software.update, "Unavailable")
@@ -91,6 +114,36 @@ const imperial = driveSummary({ status: "ready", data: { ...drives, isMetric: fa
 assert.equal(imperial.last.distance, "7.5 mi")
 assert.equal(imperial.week.days[6].distance, "7.5 mi")
 assert.equal(imperial.records[0].display, "7.5 mi")
+const modelHistory = ["ResFit", "Train Track", "Mountain Dew v3", "Light Speed 2", "Polaris Vega",
+  ...Array.from({ length: 12 }, (_, index) => `Recorded model ${index + 6}`)]
+  .map((name, index) => ({ name, distanceMeters: (17 - index) * 1000, durationSeconds: 60, drives: 1 }))
+const allModels = driveSummary({ status: "ready", data: { ...drives, models: modelHistory } })
+assert.deepEqual(allModels.models.map(model => model.name), modelHistory.map(model => model.name),
+  "Recorded Models must include the full history, including lower-mileage recent models")
+assert.equal(new Set(allModels.models.map(model => model.color)).size, modelHistory.length)
+assert.ok(allModels.models.every(model => model.color && model.distance && model.drives === 1))
+assert.ok(allModels.models.every(model => model.arc && Number.isFinite(model.share)))
+assert.ok(Math.abs(allModels.models.reduce((sum, model) => sum + model.share, 0) - 100) < 1e-9)
+assert.ok(allModels.models.every(model => !/NaN|undefined/.test(model.arc)))
+const zeroModels = driveSummary({ status: "ready", data: { ...drives,
+  models: modelHistory.map(model => ({ ...model, distanceMeters: 0 })) } })
+assert.ok(zeroModels.models.every(model => model.arc === "" && model.share === 0 && model.shareLabel === "0.0%"))
+assert.ok(!/NaN|undefined/.test(modelArc(0, 100)))
+assert.equal(modelArc(0, 0), "")
+const compactPage = { driving: allModels, showAllModels: false, activeModel: 10 }
+assert.equal(Home.computed.visibleModels.call(compactPage).length, 6)
+assert.equal(Home.computed.selectedModel.call(compactPage).name, modelHistory[10].name)
+compactPage.showAllModels = true
+assert.equal(Home.computed.visibleModels.call(compactPage).length, 17)
+compactPage.activeModel = 99
+assert.equal(Home.computed.selectedModel.call(compactPage).index, 0)
+const bigLabels = driveSummary({ status: "ready", data: { ...drives, models: [
+  { ...modelHistory[0], name: "ResFit (Chestnut big)" },
+  { ...modelHistory[1], name: "Chestnut big model (identity not recorded)" }] } })
+assert.deepEqual(bigLabels.models.map(model => model.name), ["ResFit (Big)", "Big model (identity not recorded)"])
+assert.ok(Home.template.includes('@pointerenter="activeModel = model.index"'))
+assert.ok(Home.template.includes('@keydown.space.prevent="activeModel = model.index"'))
+assert.ok(Home.template.includes('Show all '))
 const previousTZ = process.env.TZ
 process.env.TZ = "America/Chicago"
 const midnightDrive = { ...route, startTime: Date.parse("2026-09-27T04:30:00Z") / 1000,

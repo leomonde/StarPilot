@@ -3,6 +3,7 @@
 from collections import deque
 from dataclasses import replace
 import math
+from typing import TYPE_CHECKING, cast
 import numpy as np
 
 import openpilot.cereal.messaging as messaging
@@ -17,11 +18,16 @@ from opendbc.bluepilot_lateral.core.lateral_angle_ext import LateralAngleExt
 from opendbc.bluepilot_lateral.core.lateral_inputs import lateral_inputs_complete
 from opendbc.bluepilot_lateral.can.fordcan_ext import lat_ctl2_checksum, create_lat_ctl2_msg
 from opendbc.car.ford.values import CarControllerParams, FordFlags
+from opendbc.car.ford.aol import qualified as qualified_aol
 from opendbc.car import structs
 from opendbc.car.vehicle_model import calc_slip_factor
 from opendbc.bluepilot_lateral.core.carcontroller_ext import pinion_vehicle_model
 from opendbc.car.lateral import ISO_LATERAL_ACCEL
 from openpilot.starpilot.car.ford.controller_selection import FordController, read_controller
+
+if TYPE_CHECKING:
+  from openpilot.starpilot.car.ford.starpilot_controller import StarPilotFordController
+
 
 STARTUP_KEYS = ("FordPrefSteerAngleCurvature",)
 # Global StarPilot lane settings are the only lane-positioning owner.
@@ -36,6 +42,17 @@ HOST_SETTINGS = {
   "lane_centering_strength_ang": 0.0,
 }
 SETTINGS_REFRESH_FRAMES = 300  # 3 s of card's 100 Hz loop
+
+
+def quiet_cluster_display(address, data):
+  if len(data) != 8:
+    return False
+  if address == 0x18A:
+    return ((data[5] >> 2) & 7) <= 1 and not (
+      data[0] & 0xE0 or data[1] & 1 or data[3] & 0xF0 or data[4] & 0xC0 or data[5] & 0x80 or data[6] & 0x3F)
+  if address == 0x3D8:
+    return data[6] >> 3 in (0, 30) and not (data[4] & 0x0D or data[5] & 0x18 or data[6] & 6)
+  return False
 
 
 def startup_params(params, *, enabled: bool) -> dict[str, str]:
@@ -72,15 +89,24 @@ class BluePilotInputs:
     self.frames = 0
     self.settings = []
     self.unknown_keys = set()
+    self.settings = self.read_settings()
+    self.pending_settings = (self.controller_choice, self.settings)
 
   def read_settings(self):
+    self.controller_choice, entries = self._read_settings()
+    return entries
+
+  def refresh_settings(self):
+    self.pending_settings = self._read_settings()
+
+  def _read_settings(self):
     entries = []
-    self.controller_choice = read_controller(self.cp, self.params)[0]
+    choice = read_controller(self.cp, self.params)[0]
     for key in BP_LATERAL_PARAMS:
       try:
         if key == "FordPrefLateralControl":
-          value = int(self.controller_choice in (FordController.BLUEPILOT_ANGLE, FordController.STARPILOT))
-        elif key == "disable_BP_lat_UI" and self.controller_choice is None:
+          value = int(choice in (FordController.BLUEPILOT_ANGLE, FordController.STARPILOT))
+        elif key == "disable_BP_lat_UI" and choice is None:
           value = True
         else:
           value = HOST_SETTINGS[key] if key in HOST_SETTINGS else self.params.get(key, return_default=True)
@@ -91,12 +117,12 @@ class BluePilotInputs:
         continue
       if value is not None:
         entries.append(FrameInputs.Param(key, encode(value)))
-    return entries
+    return choice, entries
 
   def update(self) -> FrameInputs:
     self.sm.update(0)
     if self.frames % SETTINGS_REFRESH_FRAMES == 0:
-      self.settings = self.read_settings()
+      self.controller_choice, self.settings = self.pending_settings
     self.frames += 1
 
     frame = FrameInputs(params=self.settings)
@@ -203,17 +229,52 @@ class FordBluePilotController(BluePilotLateral):
     if self.starpilot_selected and (not self.starpilot_frame_valid or not self.angle.inputs_valid(CS, actuators)):
       CC = structs.CarControl.new_message(latActive=False)
     if self.starpilot_selected:
-      self.angle.native_curvature_bounds = None
-      if self.native_pinion_model is not None and self.measured_seen and CS.out.vEgoRaw > 10.:
-        # Pinion native limits use 150 CAN curvature units, without learned geometry.
-        error = 150 * .00002
-        low = max(-max(self.measured_history) * .00002 - error, measured - CarControllerParams.CURVATURE_ERROR)
-        high = min(-min(self.measured_history) * .00002 + error, measured + CarControllerParams.CURVATURE_ERROR)
+      angle = cast("StarPilotFordController", self.angle)
+      angle.native_curvature_bounds = None
+      if self.measured_seen and CS.out.vEgoRaw > 10.:
+        if self.native_pinion_model is not None:
+          # Pinion native limits use 150 CAN curvature units, without learned geometry.
+          error = 150 * .00002
+          low = -max(self.measured_history) * .00002 - error
+          high = -min(self.measured_history) * .00002 + error
+        else:
+          # An old yaw extreme can expire before the next steering packet consumes its metadata.
+          history = list(self.measured_history)
+          sample_step = max((abs(b - a) for a, b in zip(history[:-1], history[1:], strict=True)), default=0)
+          # Native RX may advance one sample before the host receives the same batch.
+          error = max(0., CarControllerParams.CURVATURE_ERROR - (sample_step + 1) * .00002)
+          current_native = -self.measured_history[-1] * .00002
+          low = current_native - error
+          high = current_native + error
+        low = max(low, measured - CarControllerParams.CURVATURE_ERROR)
+        high = min(high, measured + CarControllerParams.CURVATURE_ERROR)
         # Tighten the host envelope only where both measurements agree on a command.
         if low <= high:
-          self.angle.native_curvature_bounds = (low, high)
+          angle.native_curvature_bounds = (low, high)
     packets, applied = super().step_lateral(CC, CS, actuators, apply_curvature_last)
     return self._constrain_curvature(CC, CS, actuators, apply_curvature_last, packets, applied)
+
+  def order_can_sends(self, frames):
+    if not self.CP.flags & (FordFlags.CANFD | FordFlags.NEW_PORT) and qualified_aol(self.CP, marked_only=True) and not self.lateral_active:
+      # Inactive classic steering returns display ownership to the camera.
+      frames = [(a, d, b) for a, d, b in frames if b != self.CAN.main or not quiet_cluster_display(a, d)]
+    if (not self.starpilot_selected or self.curv.primary_lateral_control != PrimaryLateralControl.angle or
+        self.frame % CarControllerParams.STEER_STEP or self.frame % CarControllerParams.LKA_STEP):
+      return frames
+    lka, lmc = [], []
+    steering_address = 0x3D6 if self.CP.flags & FordFlags.CANFD else 0x3D3
+    for index, (address, data, bus) in enumerate(frames):
+      if bus == self.CAN.main and len(data) == 8:
+        if address == 0x3CA:
+          lka.append(index)
+        elif address == steering_address:
+          lmc.append(index)
+    if len(lka) != 1 or len(lmc) != 1 or lka[0] < lmc[0]:
+      return frames
+    # Both were computed this tick; Panda must see the current shadow before its steering command.
+    reordered = list(frames)
+    reordered.insert(lmc[0], reordered.pop(lka[0]))
+    return reordered
 
   def _constrain_curvature(self, CC, CS, actuators, apply_curvature_last, packets, applied):
     state = CS.out

@@ -151,6 +151,9 @@ export class OnroadLayoutFeed {
 
 export const LayoutWidgetPreview = {
   props: ["widget", "palette", "profile", "scene", "clock24Hour", "native", "art"],
+  computed: {
+    roadNameSize() { return Math.max(18, Math.min(this.widget.width, this.widget.height) * .075) },
+  },
   methods: {
     withAlpha,
     modeLines(scene, profile) {
@@ -162,7 +165,7 @@ export const LayoutWidgetPreview = {
   },
   template: `
     <g aria-hidden="true" class="gx-layout-widget-art" :fill="palette.text || '#ffffff'">
-      <template v-if="native">
+      <template v-if="native || art?.url && art.sprites?.sprites?.[widget.id]">
         <svg v-if="art?.url && art.sprites?.sprites?.[widget.id]"
           :x="art.sprites.sprites[widget.id].offsetX || 0" :y="art.sprites.sprites[widget.id].offsetY || 0"
           :width="art.sprites.sprites[widget.id].width" :height="art.sprites.sprites[widget.id].height"
@@ -189,6 +192,19 @@ export const LayoutWidgetPreview = {
         <text :x="widget.width / 2" :y="widget.height * 101 / 112" text-anchor="middle" dominant-baseline="middle" :font-size="widget.height * 30 / 112" font-weight="500" fill="#fffffff2"
           style="filter: drop-shadow(2px 2px 1px #000000aa)">14 seconds</text>
       </template>
+      <g v-else-if="widget.kind === 'weather'">
+        <rect x="1" y="1" :width="widget.width - 2" :height="widget.height - 2" :rx="widget.height * .1"
+          :fill="palette.cardFill" :stroke="palette.cardBorder" />
+        <svg :x="widget.height * .1" :y="widget.height * .05" :width="widget.height * .8" :height="widget.height * .8" viewBox="0 0 80 80">
+          <g fill="none" stroke="#c7aef7" stroke-width="3" stroke-linecap="round">
+            <circle cx="27" cy="28" r="13" fill="#c7aef7" />
+            <path d="M27 6v-4 M27 50v4 M5 28H1 M49 28h4 M11 12l-3-3 M43 12l3-3 M11 44l-3 3" />
+          </g>
+          <path d="M20 61a13 13 0 0 1 0-26 18 18 0 0 1 34-3 14 14 0 1 1 4 29Z" fill="#edf0ff" />
+        </svg>
+        <text :x="widget.height" :y="widget.height * .55" :font-size="profile === 'large' ? 44 : 24" font-weight="600">70°F</text>
+        <text :x="widget.height" :y="widget.height * .88" :font-size="profile === 'large' ? 16 : 8" fill="#c7aef7">Open-Meteo</text>
+      </g>
       <template v-else-if="widget.kind === 'clock'">
         <text :x="widget.width / 2" :y="widget.height / 2" text-anchor="middle" dominant-baseline="middle"
           :font-size="profile === 'large' ? 48 : 21" font-weight="600"
@@ -264,13 +280,18 @@ export const LayoutWidgetPreview = {
       </g>
       <g v-else-if="widget.kind === 'nav_card'">
         <rect x="1" y="1" :width="widget.width - 2" :height="widget.height - 2" rx="39" fill="#0f0d17f5" stroke="#a07edcbe" stroke-width="2" />
-        <g transform="translate(24 47) scale(1.7)" fill="none" stroke="white" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M16 56 V30 Q16 18 28 18 H46" /><path d="M38 6 L50 18 L38 30" />
+        <text x="24" y="66" font-size="54" font-weight="700" fill="white">500 ft</text>
+        <text x="24" y="100" font-size="30" font-weight="600" fill="#ded6f4">Turn right onto Las Vegas Blvd</text>
+        <g v-for="(lane, i) in [['S', 0], ['S', 0], ['S', 0], ['R', 1], ['R', 1]]" :key="i" :transform="'translate(' + ((widget.width - 320) / 2 + i * 66) + ' 116)'">
+          <rect width="56" height="44" rx="13" :fill="lane[1] ? '#4e3e80' : '#222030'" />
+          <g transform="translate(28 22)" fill="none" :stroke="lane[1] ? '#ffffff' : '#70688a'" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round">
+            <path v-if="lane[0] === 'S'" d="M0 13 V-12 M-8 -4 L0 -12 L8 -4" />
+            <path v-else d="M-8 13 V0 Q-8 -7 -1 -7 H10 M4 -13 L10 -7 L4 -1" />
+          </g>
         </g>
-        <text x="148" y="78" font-size="40" font-weight="600" fill="white">Turn right onto</text>
-        <text x="148" y="121" font-size="40" font-weight="600" fill="white">Las Vegas Blvd</text>
-        <text x="148" y="170" font-size="30" font-weight="700" fill="#c7aef7">500 ft</text>
-        <text :x="widget.width - 24" y="170" text-anchor="end" font-size="22" fill="#bebbc5">4.2 mi - 9 min</text>
+        <rect x="24" y="171" :width="widget.width - 48 - 190" height="6" rx="3" fill="#a07edc3c" />
+        <rect x="24" y="171" :width="(widget.width - 48 - 190) * .35" height="6" rx="3" fill="#b296ff" />
+        <text :x="widget.width - 24" y="182" text-anchor="end" font-size="22" font-weight="600" fill="#ebe1ff">ETA 3:51 PM</text>
       </g>
       <g v-else-if="widget.kind === 'nav_map'">
         <defs>
@@ -292,6 +313,10 @@ export const LayoutWidgetPreview = {
         </g>
         <g :transform="'translate(' + widget.width / 2 + ' ' + widget.height * .7 + ')'">
           <circle r="22" fill="#8f6bff40" /><path d="M0 -17 L13 13 L0 6 L-13 13 Z" fill="white" stroke="#6e4fe0" stroke-width="3" stroke-linejoin="round" />
+        </g>
+        <g :transform="'translate(' + widget.width / 2 + ' ' + (widget.height * .68 + 38) + ')'">
+          <rect :x="-roadNameSize * 4.4" y="0" :width="roadNameSize * 8.8" :height="roadNameSize * 1.55" :rx="roadNameSize * .78" fill="#080c14be" />
+          <text x="0" :y="roadNameSize * 1.12" text-anchor="middle" :font-size="roadNameSize" fill="#eceef6">Desert Inn Road</text>
         </g>
       </g>
       <template v-else>
@@ -346,7 +371,8 @@ export const OnroadLayoutPage = {
       if (update.data) {
         if (!state.data && update.data.activeProfile) state.profile = update.data.activeProfile
         if (!update.data.metadata.profiles[state.profile]) state.profile = Object.keys(update.data.metadata.profiles)[0]
-        if (!Object.hasOwn(update.data.metadata.profiles[state.profile].widgets, state.selected))
+        if (!Object.hasOwn(update.data.metadata.profiles[state.profile].widgets, state.selected) ||
+            update.data.metadata.profiles[state.profile].widgets[state.selected]?.hidden === true)
           state.selected = Object.keys(update.data.metadata.profiles[state.profile].widgets)[0] || null
         state.colorError = ""
         state.placementError = ""
@@ -456,7 +482,7 @@ export const OnroadLayoutPage = {
       return ["pip_left", "pip_right"].some(id => this.state.draft?.layouts?.large?.[id]?.enabled === true)
     },
     widgets() { return Object.entries(this.profile?.widgets || {})
-      .filter(([id, widget]) => widget.available !== false || this.layout?.[id]?.enabled)
+      .filter(([id, widget]) => widget.hidden !== true && (widget.available !== false || this.layout?.[id]?.enabled))
       .map(([id, widget]) => ({ id, ...widget })) },
     layerWidgets() {
       return orderedWidgetIds(this.state.draft, this.state.data.metadata, this.state.profile)
@@ -581,7 +607,12 @@ export const OnroadLayoutPage = {
       this.state.showEditingAids = !this.state.showEditingAids
       try { localStorage.setItem(aidsPreferenceKey, this.state.showEditingAids ? "1" : "0") } catch { }
     },
-    sceneHidden(id) { return sceneHidesWidget(this.state.scene, this.state.profile, id, this.layout, this.profile?.widgets) },
+    sceneHidden(id) {
+      const { scene, profile, art } = this.state
+      const sprites = art?.status === "ready" && art.scene === scene && art.profile === (this.projection ? "projection" : profile) ?
+        art.sprites?.sprites : undefined
+      return sceneHidesWidget(scene, profile, id, this.layout, this.profile?.widgets, sprites)
+    },
     previewHidden(id) {
       if (this.projection && id === "car_exit") return false
       if (this.sceneHidden(id)) return true

@@ -10,11 +10,29 @@ def qualified(cp, *, marked_only=False):
   return stock_qualified(cp, marked_only=marked_only) or long_qualified(cp, marked_only=marked_only) or meb_qualified(cp, marked_only=marked_only)
 
 
+
+def lateral_output_inhibited(cp, state):
+  from openpilot.starpilot.aol.runtime import ordinary_lateral_requested
+  return bool(qualified(cp, marked_only=True) and
+              not ordinary_lateral_requested(True, state, cp))
+
+
 def temporary_restriction(cp, state):
   gears = structs.CarState.GearShifter
   return bool(state is not None and qualified(cp, marked_only=True) and state.canValid and not state.canTimeout and
-              not state.steerFaultPermanent and (state.steerFaultTemporary or (state.standstill and not cp.steerAtStandstill) or
+              not state.steerFaultPermanent and (state.steerFaultTemporary or lateral_output_inhibited(cp, state) or
               state.gearShifter not in (gears.drive, gears.sport, gears.eco, gears.manumatic)))
+
+
+def below_engage_lateral_allowed(cp, state, intent):
+  """A manual cruise minimum does not disarm already armed lateral intent."""
+  return bool(long_qualified(cp, marked_only=True) and
+    cp.transmissionType == structs.CarParams.TransmissionType.manual and
+    state is not None and state.canValid and not state.canTimeout and
+    not state.steerFaultPermanent and not state.steerFaultTemporary and state.cruiseState.available and
+    state.gearShifter in (structs.CarState.GearShifter.drive, structs.CarState.GearShifter.sport,
+                         structs.CarState.GearShifter.eco, structs.CarState.GearShifter.manumatic) and
+    intent is not None and intent.allowedLatch and not intent.pauseLateral)
 
 
 def policy_for(cp):

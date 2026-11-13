@@ -95,5 +95,6 @@ class TestIndependentAngleEnvelope(unittest.TestCase):
           self.assertTrue(decoded['LKAS_Request'])
           if car == CAR.SUBARU_CROSSTREK_2025:
             # The EPS bound applies to transmitted commands, not measured-angle admission.
-            # Preserve the zero command history: this target is inside the low-speed deadzone.
-            self.assertEqual(decoded['LKAS_Output'], 0.)
+            # Follow the small target without jumping to the measured angle.
+            expected = -1.45 * (1. - (30. / 31.) ** 5)
+            self.assertAlmostEqual(decoded['LKAS_Output'], round(expected, 2), places=2)

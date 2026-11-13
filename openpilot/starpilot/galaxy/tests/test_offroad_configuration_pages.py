@@ -104,11 +104,11 @@ class TestOffroadConfigurationPages(unittest.TestCase):
     self.assertTrue(self.gateway.confirm(intent['intent'], 'session', b'generation'))
     expected = {
       'aol': ('Enable Always On Lateral', 'Brake pause below'),
-      'conditional': ('Saved driving mode',),
+      'conditional': ('Driving Mode',),
       'conditional/cem': ('Speed threshold', 'Speed with lead', 'Stop lights'),
       'lane_change': ('Allow lane changes', 'Minimum lane-change speed', 'Automatic Lane Changes', 'Lane Change Speed'),
-      'slc': ('Speed Limit Controller', 'Automatic adoption'),
-      'profiles': ('Force Stop', 'Selected Acceleration Profile', 'Selected Deceleration Profile'),
+      'slc': ('Speed Limit Controller', 'Confirm limits'),
+      'profiles': ('Enhanced Stops', 'Selected Acceleration Profile', 'Selected Deceleration Profile'),
       'torque': ('Steering Controller', 'Turn Assist', 'Lat Accel', 'Friction'),
       'wheel': ('Short press', 'Hold', 'Distance long press', 'MODE press', 'Star button'),
     }
@@ -159,10 +159,11 @@ class TestOffroadConfigurationPages(unittest.TestCase):
     self.assert_no_car_cache()
 
   def test_saved_configuration_cruise_force_stop_and_wheel_edits(self):
+    self.params.put_bool("ForceStops", False, block=True)
     selection = self.params.get('VehicleSelection')
     profiles = self.page('profiles')
     rows = {row['label']: row for row in profiles['rows']}
-    self.assertTrue(rows['Force Stop']['available'])
+    self.assertTrue(rows['Enhanced Stops']['available'])
     self.assertNotIn('Short press', rows)
     self.assertNotIn('Hold', rows)
     for label, key in (('Short press', 'CustomCruise'), ('Hold', 'CustomCruiseLong')):
@@ -176,7 +177,7 @@ class TestOffroadConfigurationPages(unittest.TestCase):
     profiles = self.page('profiles')
     offset = next(row for row in profiles['rows'] if row['label'] == 'Stop Distance Adjustment')
     self.assertFalse(offset['available'])
-    index = next(i for i, row in enumerate(profiles['rows']) if row['label'] == 'Force Stop')
+    index = next(i for i, row in enumerate(profiles['rows']) if row['label'] == 'Enhanced Stops')
     intent = self.gateway.preview(profiles['view'], index, 1, 'session', b'generation')
     self.assertTrue(self.gateway.confirm(intent['intent'], 'session', b'generation'))
     self.assertTrue(self.params.get_bool('ForceStops'))
@@ -195,7 +196,7 @@ class TestOffroadConfigurationPages(unittest.TestCase):
 
   def test_alpha_off_allows_saved_long_preferences_without_runtime_activation(self):
     self.params.put_bool('AlphaLongitudinalEnabled', False, block=True)
-    self.assertTrue(next(row for row in self.page('profiles')['rows'] if row['label'] == 'Force Stop')['available'])
+    self.assertTrue(next(row for row in self.page('profiles')['rows'] if row['label'] == 'Enhanced Stops')['available'])
     rows = {row['label']: row for row in self.page('wheel')['rows']}
     for label in ('Short press', 'Hold'):
       self.assertTrue(rows[label]['available'], label)

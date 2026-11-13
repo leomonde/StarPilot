@@ -43,9 +43,9 @@ def test_projection_order_is_independent_from_native_and_survives_decode():
   native['widgetOrder'] = {profile: list(DEFAULT_WIDGET_ORDER[profile]) for profile in PROFILES}
   before = copy.deepcopy(native)
   projection = default_layout_for_viewport((2880, 1080))
-  # Legacy AA layouts must not inherit native large ordering.
-  assert 'large' not in projection_customization(projection, native)['widgetOrder']
+  # Legacy AA layouts must not inherit native large ordering; they draw the editor's default layers.
   default_order = layout_metadata_for_viewport((2880, 1080))['widgetOrder']
+  assert projection_customization(projection, native)['widgetOrder']['large'] == default_order
   projection['widgetOrder'] = [*reversed([key for key in default_order if key != CAR_EXIT]), CAR_EXIT]
   decoded = decode_layout_for_viewport(json.dumps(projection).encode(), (2880, 1080))
   assert decoded == projection
@@ -112,6 +112,7 @@ def test_renderer_dispatches_each_widget_in_saved_order(profile, viewport):
   method = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == '_ordered_widgets')
   namespace: dict[str, Any] = {'CLOCK_WIDGET': CLOCK_WIDGET, 'MODE_WIDGET': MODE_WIDGET, 'placement': placement, 'widget_order': widget_order,
                              'RAIL_WIDGETS': RAIL_WIDGETS, 'STOPPED_TIMER_WIDGET': STOPPED_TIMER_WIDGET,
+                             'render_rear_fog': lambda *args: seen.append('rear_fog'),
                'manual_slc_confirmation': lambda profile, state: False, 'AlertSize': NS(NONE='none', FULL='full'), 'CameraViewChoice': NS(NONE='none'),
                'rl': NS(Rectangle=lambda x, y, width, height: NS(x=x, y=y, width=width, height=height))}
   exec(compile(ast.Module(body=[method], type_ignores=[]), str(source), 'exec'), namespace)
@@ -123,6 +124,7 @@ def test_renderer_dispatches_each_widget_in_saved_order(profile, viewport):
   view.driver_monitor_layer = lambda *args: seen.append('driver_monitor')
   view._driving_mode = lambda *args: seen.append(MODE_WIDGET)
   view._clock = lambda *args: seen.append(CLOCK_WIDGET)
+  view._weather = lambda *args: seen.append('weather')
   view._stopped_timer = lambda *args: seen.append(STOPPED_TIMER_WIDGET)
   view._slc_actions = lambda *args: seen.append('speed_limit_actions')
   for attr, key in [('unified_speed', 'cruise_limits'), ('current_speed', 'current_speed'), ('cem_gauge', 'cem_gauge'),

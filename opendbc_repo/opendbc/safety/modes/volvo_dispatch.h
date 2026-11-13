@@ -53,7 +53,7 @@ static uint32_t volvo_dispatch_compute_checksum(const CANPacket_t *msg) {
   return (volvo_dispatch_c1 || volvo_dispatch_eucd) ? 0U : volvo_cma_compute_checksum(msg);
 }
 static bool volvo_dispatch_quality(const CANPacket_t *msg) {
-  return volvo_dispatch_c1 || volvo_dispatch_eucd || volvo_cma_receiver_quality(msg);
+  return volvo_dispatch_c1 || volvo_dispatch_eucd || volvo_cma_receiver_quality_rx(msg);
 }
 static void volvo_dispatch_optional_rx(const CANPacket_t *msg) {
   if (volvo_dispatch_eucd) {

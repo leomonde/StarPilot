@@ -13,6 +13,7 @@ import math
 from typing import Protocol
 
 from openpilot.starpilot.ui.presentation import Profile
+from openpilot.starpilot.ui.weather import WeatherReading
 from openpilot.starpilot.ui.large_speed_geometry import ACTION_BOUNDS, LIMIT_RECTS, confirmation_bounds, confirmation_buttons
 from openpilot.starpilot.ui.appearance_preferences import CameraViewChoice, OnroadAppearance
 from openpilot.starpilot.curve_speed.status import CurveObservation
@@ -22,9 +23,9 @@ from openpilot.starpilot.ui.traffic_status import TrafficDisplay
 from openpilot.starpilot.ui.developer_preview import OnroadVisualPreview
 from openpilot.starpilot.ui.navigation_state import NavigationDisplay
 from openpilot.starpilot.ui.live_developer_sidebar import DeveloperMetric
+from openpilot.starpilot.speed_limits.speed_domain import OffsetSchedule
 
 
-TOYOTA_NOTICE_STATUSES = frozenset(('raise_dash', 'release_plus', 'off_hold', 'off_resume'))
 
 
 class ObservationKind(StrEnum):
@@ -99,14 +100,13 @@ class SpeedLimitObservation:
   presentation_adjusted_limit_mps: float | None = None
   override_basis: str = 'none'
   retained_override: bool = False
-  command_action_sequence_id: int = 0
-  command_status: str = ''
   action_feedback: str = ''
   automatic_adoption_pending: bool = False
   pending_since_ns: int = 0
   last_received_speed_limit_mps: float | None = None
   last_received_source: str = 'none'
   last_received_adjusted_limit_mps: float | None = None
+  sign_recovering: bool = False
 
   def __post_init__(self) -> None:
     for value in (self.speed_limit_mps, self.offset_mps, self.pending_speed_limit_mps,
@@ -198,6 +198,7 @@ class OnroadState:
   traffic_selected: bool = False
   traffic_display: TrafficDisplay | None = None
   aol_latched: bool | None = None
+  aol_armed_at_stop: bool = False
   lateral_active: bool = False
   longitudinal_active: bool = False
   longitudinal_overridden: bool = False
@@ -233,8 +234,6 @@ class OnroadState:
   slc_prompt_open: bool = False
   quick_select_open: bool = False
   slc_wheel_confirmation_available: bool = False
-  toyota_cruise_status: str = ''
-  toyota_cruise_target_kph: float | None = None
 
   torque_is_demand: bool = False
 
@@ -243,6 +242,11 @@ class OnroadState:
     return self.longitudinal_active or self.longitudinal_overridden or self.stock_cruise_active
 
   stop_sign_observed_ns: int = 0
+  weather_location: tuple[float, float] | None = None
+  weather: WeatherReading | None = None
+  ford_rear_fog_on: bool = False
+  ford_rear_fog_source_ns: int = 0
+  slc_offset_schedule: OffsetSchedule | None = None
 
   def __post_init__(self) -> None:
     if self.speed_mps is not None and (not math.isfinite(self.speed_mps) or self.speed_mps < 0):
@@ -262,6 +266,7 @@ class OnroadState:
       raise ValueError("Model confidence must be normalized")
 
 
+
 @dataclass(frozen=True)
 class OnroadRequest:
   kind: str
@@ -273,20 +278,21 @@ def manual_slc_confirmation(profile: Profile, state: OnroadState) -> bool:
   obs = state.speed_limit
   widget = 'speed_limit' if profile == Profile.COMPACT else 'cruise_limits'
   return bool((state.longitudinal_active or state.longitudinal_overridden) and
-              state.alert.size == AlertSize.NONE and state.toyota_cruise_status not in TOYOTA_NOTICE_STATUSES and
+              state.alert.size == AlertSize.NONE and
               (profile != Profile.COMPACT or not state.reverse_driver_camera and state.appearance.camera_view != CameraViewChoice.DRIVER) and
-              (obs.kind == ObservationKind.VALID or obs.presentation_id == 0) and
               obs.action_enabled and not obs.automatic_adoption_pending and
               obs.pending_speed_limit_mps is not None and obs.pending_speed_limit_mps > 0 and
               obs.session_id and obs.decision_id and obs.decision_id > 0 and
-              obs.presentation_id is not None and obs.presentation_id >= 0 and
+              obs.presentation_id is not None and obs.presentation_id > 0 and
               placement(state.customization, profile, widget)['enabled'] and
               placement(state.customization, profile, 'speed_limit_actions')['enabled'])
 
 
 def slc_accept_available(state: OnroadState) -> bool:
   obs = state.speed_limit
-  return bool(obs.action_enabled and obs.kind == ObservationKind.VALID and obs.presentation_id and obs.presentation_id > 0)
+  return bool(obs.action_enabled and obs.presentation_id and obs.presentation_id > 0 and
+              (obs.kind == ObservationKind.VALID or obs.pending_speed_limit_mps is not None and
+               not obs.automatic_adoption_pending))
 
 
 def slc_action_bounds(profile: Profile, state: OnroadState):
@@ -312,12 +318,7 @@ def slc_action_occludes(profile: Profile, state: OnroadState, bounds) -> bool:
   if manual_slc_confirmation(profile, state):
     area = speed_limit_bounds(profile, state)
     return area is not None and area[0] < bounds[2] and bounds[0] < area[2] and area[1] < bounds[3] and bounds[1] < area[3]
-  notice = state.toyota_cruise_status in TOYOTA_NOTICE_STATUSES
-  if state.alert.size != AlertSize.NONE or not notice:
-    return False
-  first, last = slc_action_bounds(profile, state)
-  left, top, right, bottom = bounds
-  return first[0] < right and left < last[2] and first[1] < bottom and top < last[3]
+  return False
 
 
 def _inside_widget(x, y, state, widget, bounds):
@@ -342,10 +343,15 @@ def speed_limit_bounds(profile: Profile, state: OnroadState) -> tuple[float, flo
   if not saved['enabled']:
     return None
   if manual_slc_confirmation(profile, state):
-    return confirmation_bounds(profile, saved['x'], saved['y'], opened=state.slc_prompt_open)
-  x, y, width, height = LIMIT_RECTS[profile]
-  dx, dy = offset(state.customization, profile, widget)
-  return x + dx - 12, y + dy - 12, x + dx + width + 12, y + dy + height + 8
+    bounds = confirmation_bounds(profile, saved['x'], saved['y'], opened=state.slc_prompt_open)
+  else:
+    x, y, width, height = LIMIT_RECTS[profile]
+    dx, dy = offset(state.customization, profile, widget)
+    bounds = x + dx - 12, y + dy - 12, x + dx + width + 12, y + dy + height + 8
+    if profile == Profile.COMPACT and bounds[1] < 12:
+      shift = 12 - bounds[1]
+      bounds = bounds[0], bounds[1] + shift, bounds[2], bounds[3] + shift
+  return bounds
 
 
 def personality_bounds(profile: Profile, state: OnroadState) -> tuple[float, float, float, float] | None:
@@ -544,7 +550,7 @@ def speed_limit_from_message(message: SlcStateMessage | None) -> SpeedLimitObser
                                  limiting_max_set=bool(getattr(message, "isLimitingMaxSet", False)),
                                  driver_override_active=bool(getattr(message, "driverOverrideActive", False)),
                                  session_id=message.sessionId, decision_id=message.decisionId if live or message.hasPending else None,
-                                 presentation_id=message.presentationId if live else 0 if message.hasPending else None, status=message.status,
+                                 presentation_id=message.presentationId if live or message.hasPending else None, status=message.status,
                                  action_enabled=bool(getattr(message, "enabled", False)),
                                  action_sequence_id=int(getattr(message, "actionSequenceId", 0)),
                                  action_status=str(getattr(message, "actionStatus", "")),
@@ -560,9 +566,7 @@ def speed_limit_from_message(message: SlcStateMessage | None) -> SpeedLimitObser
                                  presentation_adjusted_limit_mps=(getattr(message, 'presentationAdjustedLimit', None)
                                    if getattr(message, 'hasPresentationAdjustedLimit', False) else None),
                                  override_basis=str(getattr(message, 'overrideBasis', 'none')),
-                                 retained_override=bool(getattr(message, 'retainedOverride', False)),
-                                 command_action_sequence_id=int(getattr(message, 'commandActionSequenceId', 0)),
-                                 command_status=str(getattr(message, 'commandStatus', '')))
+                                 retained_override=bool(getattr(message, 'retainedOverride', False)))
   except (ValueError, TypeError, AttributeError, OverflowError):
     return SpeedLimitObservation(kind=ObservationKind.UNKNOWN, source=message.source,
                                  status="Invalid SLC numeric observation")

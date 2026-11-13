@@ -110,6 +110,7 @@ class FeatureRow:
   actions: tuple[tuple[str, bool], ...] = ()
   presets: tuple[tuple[str, str], ...] = ()
   default_reset_available: bool = False
+  collapsed: bool = False  # a heading whose rows are hidden until it is opened
 
 
 @dataclass(frozen=True)
@@ -124,6 +125,8 @@ class FeatureSettingsState:
   parent_title: str = "StarPilot"
   editor: bool = False
   save_hint: str = "Changes save automatically"
+  subtitle_accent: str = ""
+  subtitle_tone: str = ""
 
 
 def feature_row_top(state: FeatureSettingsState) -> int:

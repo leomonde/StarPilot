@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { StarPortFeed, StarPortPage } from "../web/js/starport.js"
-import { guidedState, connectionStages, handshakeSteps, StarPortGuidedSetup, FIRST_RUN_NOTICE, EXHAUSTED_NOTICE } from "../web/js/starport-guided.js"
+import { guidedState, connectionStages, handshakeSteps, handshakeResettable, ladderRound, StarPortGuidedSetup, FIRST_RUN_NOTICE, EXHAUSTED_NOTICE, RESTART_TITLE } from "../web/js/starport-guided.js"
 
 const setup = { identity: { installed: true } }
 const adapterModels = { aawireless: "AAWireless", default: "Motorola MA1", unofficial: "Unofficial dongle" }
@@ -95,9 +95,31 @@ assert.equal(guidedState({ setup: null, runtime: running("rfcomm") }).show, fals
   assert.deepEqual(handshakeSteps({ steps: [null, { label: 3 }, { id: "a", label: "A", state: "worked" }] }).map((step) => step.id), ["a"])
 }
 
+// Fresh and learned-standard handshakes need no reset; alternatives and failed rungs do.
+{
+  const steps = (...states) => states.map((state, index) => ({ id: ["standard", "other_reply"][index], label: "x", state }))
+  assert.equal(handshakeResettable(null), false)
+  assert.equal(handshakeResettable(ladder({ current: "standard" })), false)
+  assert.equal(handshakeResettable(ladder({ current: "standard", learned: true, steps: steps("worked", "waiting") })), false)
+  const stuck = ladder({ current: "other_reply", steps: steps("failed", "current") })
+  assert.equal(handshakeResettable(stuck), true)
+  assert.equal(handshakeResettable(ladder({ current: "standard", learned: true, steps: steps("current", "failed") })), true)  // reverted
+  assert.equal(guidedState({ setup, runtime: running("rfcomm", { setup_ladder: stuck }) }).canResetHandshake, true)
+  assert.equal(guidedState({ setup, runtime: running("rfcomm") }).canResetHandshake, false)
+  assert.equal(guidedState({ setup, runtime: running("waiting_for_usb", { connection: "wired", setup_ladder: stuck }) }).canResetHandshake, false)
+  const page = StarPortPage.template
+  assert.match(page, /@reset-handshake="resetHandshake"/)
+  assert.match(page, /v-if="canResetHandshake"[^>]*@click="resetHandshake"/)
+  const can = (over) => StarPortPage.computed.canResetHandshake.call({ wired: false, app: "", selected: { address: "A" }, runtime: { setup_ladder: stuck }, ...over })
+  assert.equal(can({}), true)
+  assert.equal(can({ selected: null }), false)
+  assert.equal(can({ wired: true }), false)
+}
+
 // The component emits the page's actions and never invents state.
 {
-  assert.deepEqual(StarPortGuidedSetup.emits, ["choose-type", "choose-adapter", "choose-app", "use-car", "classic", "done"])
+  assert.deepEqual(StarPortGuidedSetup.emits, ["choose-type", "choose-adapter", "choose-app", "use-car", "classic", "reset-handshake", "continue-ladder", "dismiss-suggestion", "done"])
+  assert.match(StarPortGuidedSetup.template, /v-if="state\.canResetHandshake"[^>]*@click="\$emit\('reset-handshake'\)"/)
   const template = StarPortGuidedSetup.template
   assert.match(template, /\$emit\('choose-type', choice\.key\)/)
   assert.match(template, /\$emit\('use-car', car\.address\)/)
@@ -124,6 +146,23 @@ assert.equal(guidedState({ setup: null, runtime: running("rfcomm") }).show, fals
   assert.equal(options.method, "POST")
 }
 
+// Resetting the handshake is one narrow control action.
+{
+  const calls = []
+  const reply = (body, code = 200) => ({ status: code, ok: code < 300, json: async () => structuredClone(body) })
+  const feed = new StarPortFeed({ publish: () => {}, fetcher: async (path, options) => {
+    calls.push([path, options])
+    return reply(path.endsWith("/setup") ? { enabled: true, bluetoothEnabled: true, parked: true, installReady: true, serviceReady: true,
+      identity: { installed: true }, import: {}, maxUploadBytes: 1000, newSetup: true } : { status: {} })
+  }, later: () => 1, cancelTimer: () => {} })
+  feed.active = true
+  feed.setup = { enabled: true }
+  assert.equal(await feed.control("reset_handshake"), true)
+  const [path, options] = calls.find(([target]) => target.endsWith("/control"))
+  assert.equal(path, "./api/starport/control")
+  assert.deepEqual(JSON.parse(options.body), { action: "reset_handshake" })
+}
+
 // The page uses the guided card by default and only when the setup response does not say newSetup is off.
 {
   const template = StarPortPage.template
@@ -134,6 +173,18 @@ assert.equal(guidedState({ setup: null, runtime: running("rfcomm") }).show, fals
   assert.equal(StarPortPage.computed.newSetup.call(vm), false)
   assert.equal(StarPortPage.computed.newSetup.call({ setup: {} }), true)        // default on, including an older server
   assert.equal(StarPortPage.computed.newSetup.call({ setup: null }), true)
+}
+// A car-specific fix is only ever advice on the setup screen: shown when the daemon names one, never otherwise.
+{
+  const suggestion = { rule: "gm_mychevrolet_w28e", title: "Ends early", label: "Bolt", path: "Settings", detail: "A setting made for this exact car might help." }
+  assert.equal(guidedState({ setup, runtime: running("wifi_start") }).suggestion, null)
+  assert.equal(guidedState({ setup, runtime: { ...running("wifi_start"), fix_suggestion: null } }).suggestion, null)
+  assert.deepEqual(guidedState({ setup, runtime: { ...running("wifi_start"), fix_suggestion: suggestion } }).suggestion,
+    { rule: "gm_mychevrolet_w28e", text: "A setting made for this exact car might help." })
+  assert.equal(guidedState({ setup, runtime: { ...running("wifi_start"), fix_suggestion: { rule: 7 } } }).suggestion, null)
+  const calls = []
+  StarPortPage.methods.dismissSuggestion.call({ control: (action, extra) => calls.push([action, extra]) }, "gm_mychevrolet_w28e")
+  assert.deepEqual(calls, [["dismiss_fix_suggestion", { rule: "gm_mychevrolet_w28e" }]])
 }
 console.log("StarPort guided setup: question, steps, candidates, live checklist, first-run notice and handshake list passed")
 
@@ -148,7 +199,21 @@ console.log("StarPort guided setup: question, steps, candidates, live checklist,
   const done = guidedState({ setup, runtime: refused, setupDone: true })
   assert.equal(done.phase, "bluetooth")   // even a finished setup shows the thing to fix
   assert.equal(guidedState({ setup, runtime: { running: false, state: "error", error: "something else" }, carType: "adapter" }).hint, null)
+  const waiting = { running: true, state: "backoff", error: "Connecting to car: Waiting for the adapter to finish starting up" }
+  assert.equal(guidedState({ setup, runtime: waiting, carType: "adapter" }).hint, null)  // AAWireless waits; it never asks for a car
   assert.match(StarPortGuidedSetup.template, /state\.hint\.href/)
+}
+// A car-specific fix is only ever advice on the setup screen: shown when the daemon names one, never otherwise.
+{
+  const suggestion = { rule: "gm_mychevrolet_w28e", title: "Ends early", label: "Bolt", path: "Settings", detail: "A setting made for this exact car might help." }
+  assert.equal(guidedState({ setup, runtime: running("wifi_start") }).suggestion, null)
+  assert.equal(guidedState({ setup, runtime: { ...running("wifi_start"), fix_suggestion: null } }).suggestion, null)
+  assert.deepEqual(guidedState({ setup, runtime: { ...running("wifi_start"), fix_suggestion: suggestion } }).suggestion,
+    { rule: "gm_mychevrolet_w28e", text: "A setting made for this exact car might help." })
+  assert.equal(guidedState({ setup, runtime: { ...running("wifi_start"), fix_suggestion: { rule: 7 } } }).suggestion, null)
+  const calls = []
+  StarPortPage.methods.dismissSuggestion.call({ control: (action, extra) => calls.push([action, extra]) }, "gm_mychevrolet_w28e")
+  assert.deepEqual(calls, [["dismiss_fix_suggestion", { rule: "gm_mychevrolet_w28e" }]])
 }
 console.log("StarPort guided setup: Bluetooth-first hint passed")
 
@@ -212,6 +277,18 @@ console.log("StarPort guided setup: Bluetooth-first hint passed")
   assert.match(StarPortGuidedSetup.template, /<slot name="car" \/>/)
   assert.match(StarPortGuidedSetup.template, /<slot name="connect" \/>/)
 }
+// A car-specific fix is only ever advice on the setup screen: shown when the daemon names one, never otherwise.
+{
+  const suggestion = { rule: "gm_mychevrolet_w28e", title: "Ends early", label: "Bolt", path: "Settings", detail: "A setting made for this exact car might help." }
+  assert.equal(guidedState({ setup, runtime: running("wifi_start") }).suggestion, null)
+  assert.equal(guidedState({ setup, runtime: { ...running("wifi_start"), fix_suggestion: null } }).suggestion, null)
+  assert.deepEqual(guidedState({ setup, runtime: { ...running("wifi_start"), fix_suggestion: suggestion } }).suggestion,
+    { rule: "gm_mychevrolet_w28e", text: "A setting made for this exact car might help." })
+  assert.equal(guidedState({ setup, runtime: { ...running("wifi_start"), fix_suggestion: { rule: 7 } } }).suggestion, null)
+  const calls = []
+  StarPortPage.methods.dismissSuggestion.call({ control: (action, extra) => calls.push([action, extra]) }, "gm_mychevrolet_w28e")
+  assert.deepEqual(calls, [["dismiss_fix_suggestion", { rule: "gm_mychevrolet_w28e" }]])
+}
 console.log("StarPort guided setup: steps, adapter and app choices, reopening and classic-only dropdowns passed")
 
 // Choosing a cable or an app finishes the setup at once; a choice made in the card must not close the card.
@@ -236,4 +313,68 @@ console.log("StarPort guided setup: steps, adapter and app choices, reopening an
   assert.equal(held.choices.find((choice) => choice.selected).key, "app")
   assert.equal(held.apps.options.find((option) => option.selected).key, "headunitpad")
 }
+// A car-specific fix is only ever advice on the setup screen: shown when the daemon names one, never otherwise.
+{
+  const suggestion = { rule: "gm_mychevrolet_w28e", title: "Ends early", label: "Bolt", path: "Settings", detail: "A setting made for this exact car might help." }
+  assert.equal(guidedState({ setup, runtime: running("wifi_start") }).suggestion, null)
+  assert.equal(guidedState({ setup, runtime: { ...running("wifi_start"), fix_suggestion: null } }).suggestion, null)
+  assert.deepEqual(guidedState({ setup, runtime: { ...running("wifi_start"), fix_suggestion: suggestion } }).suggestion,
+    { rule: "gm_mychevrolet_w28e", text: "A setting made for this exact car might help." })
+  assert.equal(guidedState({ setup, runtime: { ...running("wifi_start"), fix_suggestion: { rule: 7 } } }).suggestion, null)
+  const calls = []
+  StarPortPage.methods.dismissSuggestion.call({ control: (action, extra) => calls.push([action, extra]) }, "gm_mychevrolet_w28e")
+  assert.deepEqual(calls, [["dismiss_fix_suggestion", { rule: "gm_mychevrolet_w28e" }]])
+}
 console.log("StarPort guided setup: a choice keeps the card open passed")
+
+// Every rung says what it does, how often it ran this drive and why it last ended; the live step shows under the current one.
+{
+  const tried = ladder({ steps: [{ id: "standard", label: "Standard handshake", state: "current", description: "Answers normally.", tries: 3, reason: "The car never said hello" },
+    { id: "other_reply", label: "The other version reply", state: "waiting", description: "Other reply.", tries: 0, reason: "" }] })
+  const steps = handshakeSteps(tried)
+  assert.deepEqual(steps[0], { id: "standard", label: "Standard handshake", state: "current", description: "Answers normally.", tries: 3, reason: "The car never said hello" })
+  assert.equal(steps[1].tries, 0)
+  const state = guidedState({ setup, runtime: running("wifi_start", { setup_ladder: tried, handshake_step: "Asking for its Wi-Fi name and password" }) })
+  assert.equal(state.liveStep, "Asking for its Wi-Fi name and password")
+  assert.equal(state.round, "Round 1 of 3")
+  assert.equal(ladderRound(ladder({ passes: 2 })), "Round 3 of 3")
+  assert.equal(ladderRound(ladder({ learned: true })), "")
+  assert.equal(ladderRound(ladder({ exhausted: true })), "")
+  assert.equal(guidedState({ setup, runtime: running("waiting_for_usb", { connection: "wired", handshake_step: "x" }) }).liveStep, "")
+  assert.match(StarPortGuidedSetup.template, /step\.description/)
+  assert.match(StarPortGuidedSetup.template, /state\.liveStep/)
+}
+
+// An unofficial dongle waiting for a restart gets the restart card with Continue; other receivers only get told about the hang-ups.
+{
+  const restart = guidedState({ setup, carType: "adapter", runtime: running("dongle_restart", { hangups: 6, dongle_restart: { hangups: 6 } }) })
+  assert.equal(restart.show, true)
+  assert.equal(restart.phase, "restart")
+  assert.equal(restart.title, RESTART_TITLE)
+  assert.deepEqual(restart.restart, { hangups: 6 })
+  assert.equal(restart.progress[0].state, "active")
+  const builtin = guidedState({ setup, carType: "builtin", runtime: running("backoff", { last_stage: "rfcomm", hangups: 7 }) })
+  assert.equal(builtin.restart, null)
+  assert.match(builtin.notice, /The car has hung up 7 times/)
+  assert.match(guidedState({ setup, carType: "adapter", runtime: running("backoff", { hangups: 6 }) }).notice, /unplug the adapter/)
+  assert.equal(guidedState({ setup, carType: "builtin", runtime: running("backoff", { hangups: 5 }) }).notice, FIRST_RUN_NOTICE)
+  assert.match(StarPortGuidedSetup.template, /\$emit\('continue-ladder'\)/)
+  assert.match(StarPortPage.template, /@continue-ladder="continueLadder"/)
+  const calls = []
+  StarPortPage.methods.continueLadder.call({ control: (action) => calls.push(action) })
+  assert.deepEqual(calls, ["continue_ladder"])
+}
+// A car-specific fix is only ever advice on the setup screen: shown when the daemon names one, never otherwise.
+{
+  const suggestion = { rule: "gm_mychevrolet_w28e", title: "Ends early", label: "Bolt", path: "Settings", detail: "A setting made for this exact car might help." }
+  assert.equal(guidedState({ setup, runtime: running("wifi_start") }).suggestion, null)
+  assert.equal(guidedState({ setup, runtime: { ...running("wifi_start"), fix_suggestion: null } }).suggestion, null)
+  assert.deepEqual(guidedState({ setup, runtime: { ...running("wifi_start"), fix_suggestion: suggestion } }).suggestion,
+    { rule: "gm_mychevrolet_w28e", text: "A setting made for this exact car might help." })
+  assert.equal(guidedState({ setup, runtime: { ...running("wifi_start"), fix_suggestion: { rule: 7 } } }).suggestion, null)
+  const calls = []
+  StarPortPage.methods.dismissSuggestion.call({ control: (action, extra) => calls.push([action, extra]) }, "gm_mychevrolet_w28e")
+  assert.deepEqual(calls, [["dismiss_fix_suggestion", { rule: "gm_mychevrolet_w28e" }]])
+}
+console.log("StarPort guided setup: rung detail, live step and the dongle restart card passed")
+

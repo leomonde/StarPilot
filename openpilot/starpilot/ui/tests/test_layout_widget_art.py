@@ -47,6 +47,55 @@ def test_widget_art_registry_is_shared_with_native_and_projection_metadata():
   assert layout_metadata_for_viewport((2880, 1080))['runtimePreviewWidgets'] == list(RUNTIME_PREVIEW_WIDGETS['large'])
 
 
+@pytest.mark.parametrize('profile', ['large', 'compact'])
+def test_native_prompt_art_parses_in_galaxy_and_reports_obscured_widgets(profile):
+  import io
+  from pathlib import Path
+  import subprocess
+  from PIL import Image
+  from openpilot.starpilot.ui.layout_preview_renderer import _Canvas, sample_state
+  from openpilot.starpilot.ui.onroad_customization import validate_document
+  from openpilot.starpilot.ui.presentation import Profile
+  from openpilot.starpilot.ui.raylib import rl
+
+  document = default_document()
+  layout = document['layouts'][profile]
+  if profile == 'compact':
+    layout['max_speed']['enabled'] = False
+    layout['speed_limit'].update(x=200, y=16)
+    x, y, obscured = 200, 0, 'driver_monitor'
+  else:
+    layout['cruise_limits']['x'] = 600
+    x, y, obscured = 900, 80, 'current_speed'
+  for key in ('clock', 'driving_mode_descriptions'):
+    layout[key].update(enabled=True, x=x, y=y)
+  document = validate_document(document)
+  own_window = not rl.is_window_ready()
+  if own_window:
+    rl.init_window(128, 128, 'Native preview contract')
+  canvas = _Canvas(Profile(profile))
+  try:
+    for scene, visible in [('slc_pending', False), ('engaged', True)]:
+      png = canvas.render_widget_art(sample_state(scene, document), document['layouts'][profile])
+      with Image.open(io.BytesIO(png)) as image:
+        native = json.loads(image.info['starpilot-widget-art'])
+      assert len(native['sprites']) == len(RUNTIME_PREVIEW_WIDGETS[profile])
+      for key in (obscured, 'clock', 'driving_mode_descriptions'):
+        assert native['sprites'][key]['visible'] is visible, (scene, key)
+      parser = Path(__file__).parents[2] / 'galaxy/web/js/widget-art.js'
+      script = f"""
+        import {{widgetArtMetadata}} from {json.dumps(parser.as_uri())};
+        const data = []; for await (const part of process.stdin) data.push(part);
+        console.log(JSON.stringify(await widgetArtMetadata(new Blob(data))));
+      """
+      result = subprocess.run(['node', '--input-type=module', '-e', script], input=png, capture_output=True, check=True)
+      assert json.loads(result.stdout) == native
+  finally:
+    canvas.close()
+    if own_window:
+      rl.close_window()
+
+
 def test_transparent_render_coverage_exports_straight_alpha_without_darkening():
   straight = _straight_rgba(bytes((128, 64, 0, 128, 9, 8, 7, 0, 255, 255, 255, 255)))
   assert straight == bytes((255, 128, 0, 128, 0, 0, 0, 0, 255, 255, 255, 255))
@@ -147,6 +196,7 @@ def test_large_wheel_art_is_drawn_inside_its_crop_with_or_without_sidebar(monkey
   canvas.view = view
   monkeypatch.setattr(canvas, '_settle', lambda state: None)
   monkeypatch.setitem(renderer.RUNTIME_PREVIEW_WIDGETS, 'large', ('steering_wheel',))
+  monkeypatch.setattr('openpilot.starpilot.system.starport.projection_layout.SPRITE_WIDGETS', ())
   monkeypatch.setattr(rl, 'rl_set_blend_factors_separate', Mock())
   for method in ('begin_texture_mode', 'clear_background', 'begin_blend_mode', 'end_blend_mode', 'end_texture_mode',
                  'image_format', 'image_flip_vertical', 'image_crop', 'unload_image', 'draw_circle', 'draw_ring', 'draw_texture_pro'):
@@ -162,3 +212,36 @@ def test_large_wheel_art_is_drawn_inside_its_crop_with_or_without_sidebar(monkey
   assert crop.y <= drawn.y < drawn.y + drawn.height <= crop.y + crop.height
   color = rl.draw_texture_pro.call_args.args[-1]
   assert (color.r, color.g, color.b) == (255, 0, 0), 'The braking wheel must remain visible and red'
+
+
+def test_starport_widgets_get_sprites_and_empty_ones_keep_the_sketch(monkeypatch):
+  from types import SimpleNamespace as NS
+  from unittest.mock import Mock
+  from openpilot.starpilot.ui.raylib import rl
+  from openpilot.starpilot.ui import layout_preview_renderer as renderer
+  from openpilot.starpilot.ui.presentation import Profile
+  from openpilot.starpilot.system.starport.projection_layout import default_layout_for_viewport, projection_customization
+
+  viewport = (1920, 1080)
+  layout = default_layout_for_viewport(viewport)
+  layout['widgets']['nav_home']['enabled'] = True
+  document = projection_customization(layout, default_document())
+  canvas = renderer._Canvas.__new__(renderer._Canvas)
+  canvas.profile, canvas.viewport = Profile.LARGE, viewport
+  monkeypatch.setattr(canvas, 'fonts', NS(profile=Profile.LARGE), raising=False)
+  canvas.target = NS(texture=object())
+  drawn = []
+  monkeypatch.setattr(canvas, 'view', NS(_ordered_widgets=lambda content, state, only_widget=None: drawn.append(only_widget)), raising=False)
+  monkeypatch.setattr(canvas, '_settle', lambda state: None)
+  monkeypatch.setitem(renderer.RUNTIME_PREVIEW_WIDGETS, 'large', ())
+  monkeypatch.setattr(rl, 'rl_set_blend_factors_separate', Mock())
+  for method in ('begin_texture_mode', 'clear_background', 'begin_blend_mode', 'end_blend_mode', 'end_texture_mode',
+                 'image_format', 'image_flip_vertical', 'image_crop', 'unload_image'):
+    monkeypatch.setattr(rl, method, Mock())
+  # Only the nav card draws anything; every other StarPort widget comes back transparent.
+  monkeypatch.setattr(rl, 'load_image_from_texture', lambda texture: NS(data=np.full(1920 * 1080 * 4, 255 if drawn[-1] == 'nav_card' else 0, np.uint8)))
+  png = Mock(return_value=b'png')
+  monkeypatch.setattr(renderer, '_png_rgba', png)
+  canvas.render_widget_art(renderer.sample_state('general', document), layout['widgets'], general=True)
+  assert 'nav_home' in drawn and 'nav_map' not in drawn
+  assert set(png.call_args.kwargs['widget_art']['sprites']) == {'nav_card'}

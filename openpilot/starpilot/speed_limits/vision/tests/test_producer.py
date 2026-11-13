@@ -35,16 +35,22 @@ class TestVisionProducer(unittest.TestCase):
     self.sm.logMonoTime = {'drivingModelData': 0}
     self.sm.__getitem__ = Mock(return_value=self.model)
     for patcher in (patch.object(messaging, 'SubMaster', return_value=self.sm),
+                    patch.object(producer, '_requested_tasks', return_value=(True, True)),
                     patch.object(producer, '_configure_process'), patch.object(producer, '_place_inference')):
       patcher.start()
       self.addCleanup(patcher.stop)
 
   def test_vision_avoids_vasm_core_when_both_enabled(self):
-    with patch.object(producer, 'vasm_enabled', side_effect=[True, False]), \
-         patch('openpilot.common.realtime.set_core_affinity') as affinity:
+    with patch('openpilot.common.realtime.set_core_affinity') as affinity, \
+         patch.object(producer, 'vasm_enabled', side_effect=[True, False]), \
+         patch('openpilot.common.hardware.PC', False), \
+         patch.object(producer.os, 'listdir', return_value=['100', '101']), \
+         patch.object(producer.os, 'sched_setaffinity') as threads:
       place_inference(object())
       place_inference(object())
     self.assertEqual([call.args[0] for call in affinity.call_args_list], [[0, 1], [0, 1, 2]])
+    self.assertEqual([call.args for call in threads.call_args_list],
+                     [(100, [0, 1]), (101, [0, 1]), (100, [0, 1, 2]), (101, [0, 1, 2])])
 
   def clock_pairs(self, clocks, states=None):
     pairs = iter(clocks)
@@ -63,9 +69,9 @@ class TestVisionProducer(unittest.TestCase):
 
     return next_pair
 
-  def run_frame(self, streams, *, completion_age_ns=10_000_000, model_states=None, metric=False, number=55):
-    core = Mock(last_published_support_at=1., last_detection_at=0., stop_detections=())
-    core.observe.return_value = (number, 0.9, 2, 1)
+  def run_frame(self, streams, *, completion_age_ns=10_000_000, model_states=None, metric=False, number=55, speed_enabled=True, stops=()):
+    core = Mock(last_published_support_at=1., last_detection_at=0., stop_detections=stops)
+    core.observe.return_value = (number, 0.9, 2, 1) if speed_enabled else None
     client = Mock()
     client.is_connected.return_value = True
     camera = Mock(return_value=client)
@@ -78,7 +84,8 @@ class TestVisionProducer(unittest.TestCase):
 
     clocks = [(1_000_000_000, 5_000_000_000), (1_000_000_000, 5_000_000_000),
               (1_000_000_000 + completion_age_ns, 5_000_000_000 + completion_age_ns)]
-    with patch('msgq.visionipc.VisionIpcClient', camera), \
+    with patch.object(producer, '_requested_tasks', return_value=(speed_enabled, True)), \
+         patch('msgq.visionipc.VisionIpcClient', camera), \
          patch('openpilot.common.params.Params', return_value=SimpleNamespace(get_bool=lambda _: metric)), \
          patch.object(messaging, 'PubMaster', return_value=SimpleNamespace(send=send)), \
          patch.object(producer, 'VisionModelCore', return_value=core), \
@@ -394,9 +401,9 @@ class TestVisionProducer(unittest.TestCase):
     core.reset()
     self.assertEqual(core.last_detection_at, 0.)
 
-  def cooldown_messages(self, *, processing_ns=500_000_000, heartbeat_failure=None, metric=False):
+  def cooldown_messages(self, *, processing_ns=500_000_000, heartbeat_failure=None, metric=False, numeric=True, stops=()):
     core = VisionModelCore.__new__(VisionModelCore)
-    core.stop_detections = ()
+    core.stop_detections = stops
     core.is_metric = metric
     core.history = deque()
     core.reset()
@@ -450,12 +457,30 @@ class TestVisionProducer(unittest.TestCase):
          patch.object(producer, '_convert_camera_buffer', side_effect=lambda buffer: frames[buffer[2]]) as convert, \
          patch.object(producer, 'clock_pair_ns', side_effect=clock_pair), \
          patch.object(producer.time, 'sleep'), \
-         patch.object(core, 'infer', side_effect=[Detection(55, 0.90), None]) as infer, \
+         patch.object(core, 'infer', side_effect=[Detection(55, 0.90) if numeric else None, None]) as infer, \
          self.assertRaises(EndProducer):
       producer.main()
     self.assertEqual(infer.call_count, 2)
     self.assertEqual(convert.call_count, 2)
     return messages
+
+  def test_stop_heartbeat_does_not_require_a_numeric_speed_read(self):
+    stop = SimpleNamespace(confidence=.8, bbox=(0, 0, 2, 2))
+    messages = self.cooldown_messages(numeric=False, stops=(stop,))
+    heartbeats = [(event, stamp) for event, stamp in messages if 1_500_000_000 < stamp < 2_250_000_000]
+    self.assertTrue(heartbeats)
+    for event, stamp in heartbeats:
+      self.assertEqual(str(event.status), 'unknown')
+      self.assertEqual(event.speedMps, 0)
+      self.assertEqual(event.validUntilMonoTime, 0)
+      self.assertEqual(str(event.stopSigns.status), 'valid')
+      self.assertEqual(event.stopSigns.observedMonoTime, 1_000_000_000)
+      self.assertEqual(event.stopSigns.cameraFrameEofBootTime, 5_000_000_000)
+      self.assertEqual(event.stopSigns.frameId, 0)
+      self.assertEqual(event.stopSigns.validUntilMonoTime, 2_500_000_000)
+      self.assertLess(stamp, event.stopSigns.validUntilMonoTime)
+      self.assertEqual(len(event.stopSigns.detections), 1)
+    self.assertEqual(len({event.stopSigns.frameId for event, _ in heartbeats}), 1)
 
   def test_metric_heartbeat_keeps_the_original_conversion(self):
     messages = self.cooldown_messages(metric=True)
@@ -629,6 +654,85 @@ class TestVisionProducer(unittest.TestCase):
     self.assertNotEqual(messages[0].producerSessionId, messages[1].producerSessionId)
     self.assertEqual(messages[1].producerSessionId, messages[2].producerSessionId)
     self.assertEqual(messages[2].supportCount, 2)
+
+
+  def test_stop_only_publishes_typed_stop_without_a_speed_result(self):
+    from openpilot.starpilot.speed_limits.vision.stop_signs import StopDetection
+    _, _, messages = self.run_frame({VisionStreamType.VISION_STREAM_NARROW_ROAD}, speed_enabled=False,
+                                     stops=(StopDetection(.9, (0, 0, 1, 1)),))
+    self.assertEqual(messages[-1].status, 'unknown')
+    self.assertEqual(messages[-1].speedMps, 0)
+    self.assertEqual(messages[-1].stopSigns.status, 'valid')
+    self.assertEqual(len(messages[-1].stopSigns.detections), 1)
+    self.assertEqual(messages[-1].stopSigns.frameId, 12)
+
+  def test_disabling_speed_in_the_live_producer_clears_retained_numbers(self):
+    reader = Mock()
+    reader.getLayerId.return_value = 0
+    detector = Mock(stops=np.zeros((1, 5, 4096), np.float32), rgb256=None)
+    detector.forward.return_value = np.zeros((1, 5, 1344), np.float32)
+    from openpilot.starpilot.speed_limits.vision.tests import _identity_fixture as projection_fixture
+    with patch.object(producer.VisionModelCore, '_verified_model_path'), \
+         patch('openpilot.starpilot.speed_limits.vision.traffic_signs.SpeedFaceVerifier', side_effect=lambda _: projection_fixture.fake_identity()), \
+         patch.object(producer.VisionModelCore, '_load_net', side_effect=[detector, reader]), \
+         patch.object(producer.VisionModelCore, '_validate_model_abi'):
+      core = producer.VisionModelCore(is_metric=False)
+    self.assertIsNotNone(core.classifier_net)
+    core.published_speed_limit_mph = 55
+    core.published_support_count = 3
+    core.last_published_support_at = 1.0
+    client = Mock()
+    client.is_connected.return_value = True
+    camera = Mock(return_value=client)
+    camera.available_streams.side_effect = [{VisionStreamType.VISION_STREAM_NARROW_ROAD}, EndProducer()]
+    messages = []
+
+    def send(service, event):
+      self.assertEqual(service, 'slcVisionObservation')
+      messages.append(messaging.log_from_bytes(event.to_bytes()).slcVisionObservation.vision)
+
+    clocks = [(1_000_000_000, 5_000_000_000), (1_000_000_000, 5_000_000_000),
+              (1_010_000_000, 5_010_000_000), (1_010_000_000, 5_010_000_000),
+              (1_010_000_000, 5_010_000_000)]
+    from openpilot.starpilot.speed_limits.vision.stop_signs import CapturedStopDetectorOutputs
+    with patch.object(core, '_detector_for_mode', return_value=CapturedStopDetectorOutputs(projection_fixture.Net('stop'))), \
+         patch.object(core, '_verified_model_path'), \
+         patch.object(producer, '_requested_tasks', side_effect=[(True, True), (False, True)]), \
+         patch('msgq.visionipc.VisionIpcClient', camera), \
+         patch('openpilot.common.params.Params', return_value=SimpleNamespace(get_bool=lambda _: False)), \
+         patch.object(messaging, 'PubMaster', return_value=SimpleNamespace(send=send)), \
+         patch.object(producer, 'VisionModelCore', return_value=core), \
+         patch.object(producer, '_camera_buffer', return_value=(object(), 5_000_000_000, 12)), \
+         patch.object(producer, '_convert_camera_buffer', return_value=(np.zeros((2, 2, 3), np.uint8), 5_000_000_000, 12)), \
+         patch.object(producer, 'clock_pair_ns', side_effect=self.clock_pairs(clocks)), \
+         patch.object(producer.time, 'sleep'), \
+         self.assertRaises(EndProducer):
+      producer.main()
+    self.assertFalse(core.speed_enabled)
+    self.assertIsNone(core.classifier_net)
+    self.assertEqual(core.published_speed_limit_mph, 0)
+    self.assertEqual(core.last_classifier_forward_count, 0)
+    self.assertEqual(messages[-1].stopSigns.status, 'valid')
+    self.assertTrue(all(message.speedMps == 0 and message.status != 'valid' for message in messages))
+
+
+class TestVisionTaskRequests(unittest.TestCase):
+  def test_force_stop_requests_detection_without_speed_settings_or_vision_selection(self):
+    with TemporaryDirectory() as directory, patch.dict('os.environ', {}, clear=True):
+      params = Params(directory)
+      for key, value in [('SpeedLimitController', False), ('ShowSpeedLimits', False), ('ForceStops', True)]:
+        params.put_bool(key, value, block=True)
+      params.put('SLCPriority1', 'Dashboard', block=True)
+      params.put('SLCPriority2', 'Map Data', block=True)
+      self.assertEqual(producer._requested_tasks(params), (False, True))
+      params.put_bool('ShowSpeedLimits', True, block=True)
+      self.assertEqual(producer._requested_tasks(params), (False, True))
+      params.put('SLCPriority1', 'Vision', block=True)
+      self.assertEqual(producer._requested_tasks(params), (True, True))
+      params.put_bool('ForceStops', False, block=True)
+      self.assertEqual(producer._requested_tasks(params), (True, False))
+      params.put_bool('ShowSpeedLimits', False, block=True)
+      self.assertEqual(producer._requested_tasks(params), (False, False))
 
 
 if __name__ == '__main__':

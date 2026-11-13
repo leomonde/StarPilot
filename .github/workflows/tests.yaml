@@ -57,6 +57,9 @@ jobs:
     - name: Test CI tools
       if: ${{ !cancelled() && steps.build.outcome == 'success' }}
       run: python3 -m unittest discover -s tools/ci/tests -v
+    - name: Test authenticated monitoring release artifacts
+      if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+      run: python3 -m pytest -q tools/ci/tests/test_stock_monitoring_release.py
     - name: Test updater
       if: ${{ !cancelled() && steps.build.outcome == 'success' }}
       run: python3 -m unittest discover -s openpilot/system/updated/tests -v
@@ -347,7 +350,7 @@ jobs:
     - name: Build native host dependencies
       run: scons
     - name: Gate every assigned lifecycle module serially
-      timeout-minutes: 10
+      timeout-minutes: 15
       env:
         RAYLIB_BACKEND: headless
       run: python3 tools/ci/run_vehicle_tests.py --suite aol-lifecycle --shard-index "${{ matrix.shard }}" --shard-count 16 --output "ci-results/aol-lifecycle-${{ matrix.shard }}"

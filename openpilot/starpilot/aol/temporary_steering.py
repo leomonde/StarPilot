@@ -49,7 +49,11 @@ def temporary_steering_intent_current(self, sm, cp, cs, axis, stamp, now_ns, *, 
     now_ns - previous[8] <= AXIS_MAX_AGE_NS and
     0 < self.lateral_source_ns <= now_ns and
     now_ns - self.lateral_source_ns <= AXIS_MAX_AGE_NS)
-  held_original = bool(axis.desiredLateral and axis.lateralActive and axis.nativeAcknowledged and
+  repeated_native_first = bool(signature == previous and not axis.lateralActive and
+    0 < now_ns <= self.hkg_eps_join_until_ns)
+  held_original = bool(axis.desiredLateral and (axis.lateralActive or
+    cp.brand == 'hyundai' and str(cp.steerControlType) == 'angle' and
+    (fresh_active_successor or repeated_native_first)) and axis.nativeAcknowledged and
     (signature == previous or fresh_active_successor))
   if not withdrawn and not held_original:
     return False
@@ -58,13 +62,30 @@ def temporary_steering_intent_current(self, sm, cp, cs, axis, stamp, now_ns, *, 
     not axis.desiredLongitudinal and not axis.longitudinalActive and not cs.steeringDisengage and
     cs.cruiseState.available and not cs.cruiseState.enabled and stock_user is not None and
     any(event.name == stock_user and event.userDisable for event in sm['onroadEvents']))
+  from openpilot.starpilot.car.subaru.aol import temporary_eps_brake_recovery
+  subaru_brake = bool(stock_eps_user and temporary_eps_brake_recovery(
+    cp, cs, previous_brake=bool(self.subaru_eps_brake_event_ns and self.subaru_eps_brake_event_ns == event_ns)))
+  from opendbc.car import structs
+  from opendbc.car.honda.stock_aol import qualified as honda_qualified
+  # Existing LAT intent only: brake still removes LONG, and EPS still blocks output.
+  honda_eps = bool(honda_qualified(cp, marked_only=True) and cs.steerFaultTemporary and
+    self.lateral_only_baseline and not axis.desiredLongitudinal and not axis.longitudinalActive and
+    cs.gearShifter in (structs.CarState.GearShifter.drive, structs.CarState.GearShifter.sport,
+                      structs.CarState.GearShifter.low, structs.CarState.GearShifter.brake) and
+    cs.cruiseState.available and not cs.accFaulted and not cs.doorOpen and
+    not cs.vehicleSensorsInvalid and not cs.steeringDisengage and not cs.buttonEvents)
   # Seatbelt blocks normal LONG, not admitted LAT intent. Keep warnings/native/output checks.
   events = tuple(event for event in sm['onroadEvents'] if not (
     stock_eps_user and event.name == stock_user and event.userDisable and
     not event.softDisable and not event.immediateDisable) and not (
+    (subaru_brake or honda_eps and cs.brakePressed) and
+    event.name == log.OnroadEvent.EventName.pedalPressed and event.userDisable and
+    not event.softDisable and not event.immediateDisable) and not (
     self.lateral_only_baseline and cs.seatbeltUnlatched and not axis.desiredLongitudinal and
     not axis.longitudinalActive and event.name == log.OnroadEvent.EventName.seatbeltNotLatched and
     event.softDisable and event.noEntry and not event.immediateDisable and not event.userDisable))
+  if honda_eps and any(event.userDisable for event in events):
+    return False
   temporary_names = (log.OnroadEvent.EventName.steerTempUnavailable,
     log.OnroadEvent.EventName.steerTempUnavailableSilent)
   if (not sm.seen['onroadEvents'] or not sm.valid['onroadEvents'] or not sm.alive['onroadEvents'] or
@@ -77,9 +98,12 @@ def temporary_steering_intent_current(self, sm, cp, cs, axis, stamp, now_ns, *, 
     any(event.name == log.OnroadEvent.EventName.steerOverride for event in events) and
     not any(event.softDisable or event.userDisable for event in events))
   matched_withdrawal = bool((temporary_event or override_temporary) and axis.faultEventMonoTime == event_ns <= stamp)
+  native_first_predecessor = bool(cp.brand == 'hyundai' and str(cp.steerControlType) == 'angle' and
+    previous is not None and not previous[9] and previous[11] and previous[13] and
+    not previous[10] and not previous[12] and 0 < now_ns <= self.hkg_eps_join_until_ns)
   original_active = bool(previous is not None and previous[0] == self.session and
     previous[7] == self.session and previous[5] == 'none' and
-    previous[9] and previous[11] and previous[13] and previous[6] == event_ns and
+    (previous[9] or native_first_predecessor) and previous[11] and previous[13] and previous[6] == event_ns and
     axis.sourceCarStateMonoTime >= previous[8] and stamp >= previous[2] and
     previous[14] == producer and previous[15] == self.availability_epoch and
     0 < self.lateral_source_ns <= previous[8] <= previous[2] <= now_ns <= previous[4] and
@@ -107,7 +131,6 @@ def temporary_steering_intent_current(self, sm, cp, cs, axis, stamp, now_ns, *, 
   stock_ford_eps = bool(ford_temporary_eps_restriction(cp, cs) and
     all(not event.userDisable or event.name in (log.OnroadEvent.EventName.pcmDisable,
         log.OnroadEvent.EventName.pedalPressed) and not event.softDisable and not event.immediateDisable for event in events))
-  from opendbc.car import structs
   from opendbc.car.mazda.stock_aol import qualified as mazda_qualified
   stock_mazda_eps = bool(mazda_qualified(cp, marked_only=True) and
     cs.cruiseState.available and not cs.cruiseState.enabled and
@@ -144,19 +167,23 @@ def temporary_steering_intent_current(self, sm, cp, cs, axis, stamp, now_ns, *, 
   ford_alpha_eps = bool(stock_ford_eps and cp.openpilotLongitudinalControl)
   restricted_eps = bool((temporary_eps_restriction(cp, cs) or stock_ford_eps or stock_mazda_eps or stock_rivian_eps or
                         stock_volkswagen_eps or stock_subaru_eps) and self.lateral_only_baseline and
-    not axis.desiredLongitudinal and not axis.longitudinalActive) or ford_alpha_eps or hkg_angle_eps
+    not axis.desiredLongitudinal and not axis.longitudinalActive) or ford_alpha_eps or hkg_angle_eps or honda_eps
   native = _configured_transport_native(sm, cp, self.session, now_ns,
     require_longitudinal=not ford_alpha_eps or axis.longitudinalActive, allow_restricted_lateral=restricted_eps)
   if (native is None or not native.pandaInventory or
       stock_eps_user and (native.requestedLongitudinal or native.longitudinalAllowed) or
       held_original and not (native.requestedLateral and (native.lateralAllowed or
-        restricted_eps and (ford_alpha_eps or not native.requestedLongitudinal and not native.longitudinalAllowed))) or
+        restricted_eps and (ford_alpha_eps or hkg_angle_eps or not native.requestedLongitudinal and not native.longitudinalAllowed))) or
       axis.longitudinalActive and not native.longitudinalAllowed or
       native.observedMonoTime < self.lateral_native_ns or
       (native.pandaSerial, tuple(p.hardwareSerial for p in native.pandaInventory)) != self.lateral_inventory):
     return False
+  if hkg_angle_eps and fresh_active_successor and axis.desiredLateral and not axis.lateralActive:
+    self.hkg_eps_join_until_ns = min(previous[4], self.lateral_source_ns + AXIS_MAX_AGE_NS)
   if stock_volkswagen_eps and matched_withdrawal:
     self.volkswagen_eps_source_ns = int(axis.sourceCarStateMonoTime)
+  if subaru_brake and cs.brakePressed:
+    self.subaru_eps_brake_event_ns = event_ns
   if cs.steerFaultTemporary and matched_withdrawal:
     self.temporary_eps_event_ns = int(axis.faultEventMonoTime)
     if cp.brand == 'ford':

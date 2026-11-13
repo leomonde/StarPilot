@@ -2,7 +2,7 @@
 
 ## Jetlink external inference
 
-The comma-side Jetlink client and USB transport in `jetlink_repo` are by Zeph Leggett and the [Jetlink contributors](https://github.com/zoompilot/jetlink). They are vendored from revision `a863c3801da6fd925d14eb1f5b1e250f8efcc649` under the MIT license, retained in [jetlink_repo/LICENSE](jetlink_repo/LICENSE). StarPilot's adapter (`openpilot/starpilot/models/jetlink_adapter.py`) builds on Jetlink's openpilot layer and owns its param names, Always On Lateral rule, model runner reset, settings and alerts. Companion applications and inference servers remain distributed by Jetlink.
+The comma-side Jetlink client and USB transport in `jetlink_repo` are by Zeph Leggett and the [Jetlink contributors](https://github.com/zoompilot/jetlink). They are vendored from revision `9cfde98eec1d7cc714d800504944cf1a3944513d` under the MIT license, retained in [jetlink_repo/LICENSE](jetlink_repo/LICENSE). StarPilot's adapter (`openpilot/starpilot/models/jetlink_adapter.py`) builds on Jetlink's openpilot layer and owns its param names, Always On Lateral rule, model runner reset, settings and alerts. Companion applications and inference servers remain distributed by Jetlink.
 
 ## MRR35 Hyundai angle and radar
 
@@ -35,6 +35,8 @@ The Pre-AP configuration, pedal codec/feedback, VirtualDAS feedforward table, gr
 Subaru angle support includes implementation maintained and integrated by **Jacob Waller (jacobw)** in [jacobwaller/openpilot, jul-angle-based](https://github.com/jacobwaller/openpilot/tree/542816196a18dba5f6f0af093c1ece4f415b5a22), with its [opendbc implementation at 8acbeccdab45a47aa7af170d2d17b61f0eb5e4f0](https://github.com/jacobwaller/opendbc/tree/8acbeccdab45a47aa7af170d2d17b61f0eb5e4f0). Jacob authored the VehicleModel angle-limit type correction and integrated the Crosstrek support. The branch also retains the original angle implementation and follow-up work by **lukasloetkolben and elkoled**, alongside comma contributors; their authorship remains theirs.
 
 The inherited source covers Subaru angle platform/firmware definitions, `ES_Status` cruise state, angle controller/CAN integration, vehicle-model limits and native angle enforcement. StarPilot has additional platform-specific limits, driver handoff, discovery and AOL safety guards; this attribution does not claim identical tuning or complete parity with the reference fork. Original source commits, author names, emails and titles are recorded in [the Subaru origin history](opendbc_repo/opendbc/car/subaru/ORIGIN_HISTORY.tsv).
+
+The preferred Crosstrek/2024+ Impreza angle controller is adapted from **Jacob Waller (jacobw)**'s [hackathon-crosstrek branch](https://github.com/jacobwaller/openpilot/tree/118bb0409520433c3e09119ee61c8a57546272e0), pinned to [opendbc 753fdd383a18c3f9e86af801f1e0e9db2a168e72](https://github.com/jacobwaller/opendbc/tree/753fdd383a18c3f9e86af801f1e0e9db2a168e72). Jacob authored its 100 Hz speed-dependent angle filter and 13:1 safety model.
 
 The explicit StarPilot [jacobw Subaru adapter](opendbc_repo/opendbc/car/subaru/JACOBW.md) additionally integrates that branch's low-speed filter, target-first limiting and Crosstrek EPS envelope. Its preserved stricter guards and platform scope are documented alongside the code.
 

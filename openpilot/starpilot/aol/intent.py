@@ -16,6 +16,8 @@ GearShifter = car.CarState.GearShifter
 AOL_TOGGLE = 9
 PAUSE_LATERAL = 3
 PAUSE_LONGITUDINAL = 4
+# The only wheel action WheelPublisher delivers from cruise MAIN.
+ADOPT_SPEED_LIMIT = 10
 
 @dataclass(frozen=True)
 class AolSettings:
@@ -28,6 +30,7 @@ class AolSettings:
   mode_actions: tuple[int, int, int] = (0, 0, 0)
   custom_actions: tuple[int, int, int] = (0, 0, 0)
   default_physical_buttons: bool = True
+  main_wheel_action: bool = False
 
 
 def _button_value(params, key: str) -> int | None:
@@ -64,6 +67,7 @@ def read_settings(params) -> AolSettings:
     enabled=params.get_bool('AlwaysOnLateral') and valid_pause, pause_brake_mps=pause_mps if valid_pause else 0.0,
     lkas_action=_axis_action(lkas), main_action=_axis_action(main),
     default_physical_buttons=lkas == 0 and main == 0,
+    main_wheel_action=main == ADOPT_SPEED_LIMIT,
     distance_actions=(_button_action(params, 'DistanceButtonControl'),
                       _button_action(params, 'LongDistanceButtonControl'),
                       _button_action(params, 'VeryLongDistanceButtonControl')),
@@ -141,10 +145,11 @@ def disarming_fault(events, CS, *, temporary_ui_process_failure: bool = False,
 
 class AolCardIntent:
   def __init__(self, settings: AolSettings, *, explicit_latch: bool = False, lkas_button_supported: bool = True,
-               independent_cruise_buttons: bool = False):
+               independent_cruise_buttons: bool = False, preserve_unassigned_cancel: bool = False):
     self.settings = settings
     self.explicit_latch = explicit_latch
     self.independent_cruise_buttons = independent_cruise_buttons
+    self.preserve_unassigned_cancel = preserve_unassigned_cancel
     self.lkas_button_supported = lkas_button_supported
     self.allowed_latch = False
     # Observational only: records the exact branch that changed True to False.
@@ -319,7 +324,8 @@ class AolCardIntent:
       independent_buttons = self.independent_cruise_buttons and (main_managed or lkas_managed)
       # The opt-in is bound to existing HKG torque owners. Other physical
       # owners keep their current event and native contracts.
-      main_toggle = not independent_buttons or main_managed
+      main_toggle = (not independent_buttons or main_managed) and not (
+        self.independent_cruise_buttons and self.settings.main_wheel_action)
       lkas_toggle = not independent_buttons or lkas_managed
       previously_held = (self._main_held and main_toggle) or (self._lkas_held and lkas_toggle)
       cancel_pressed = False
@@ -341,12 +347,12 @@ class AolCardIntent:
                        (not independent_buttons or int(ButtonType.mainCruise) not in consumed_buttons)) or
                       (self._lkas_held and lkas_toggle and
                        (not independent_buttons or int(ButtonType.lkas) not in consumed_buttons)))
-      if not previously_held and gesture_held and (not independent_buttons or not cancel_pressed):
+      if not previously_held and gesture_held and (not (independent_buttons or self.preserve_unassigned_cancel) or not cancel_pressed):
         self._last_latch_edge_ns = now_ns
       if cancel_pressed:
         # An unassigned cruise CANCEL cannot toggle, arm or renew independent
         # lateral. Keep the existing withdrawal for configured CANCEL actions.
-        if not self.independent_cruise_buttons or any(self.settings.cancel_actions):
+        if not (self.independent_cruise_buttons or self.preserve_unassigned_cancel) or any(self.settings.cancel_actions):
           self._record_latch_clear('cancel_press')
           self.allowed_latch = False
       elif not self._gesture_neutral_seen:

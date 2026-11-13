@@ -16,13 +16,25 @@ assert.match(laboratorySelectionError(p,{lateralModel:'a',longitudinalModel:'a'}
 assert.match(laboratorySelectionError(p,{lateralModel:'a',longitudinalModel:'unknown'}), /downloaded/)
 assert.equal(laboratorySelectionError(null,p.configuration), 'Waiting for parked device status')
 const incompatible = [model('big'), model('qcom'), model('old')]
-incompatible[0].small=false; incompatible[1].modelLabArtifactAvailable=false; incompatible[2].modelLabEligible=false
+incompatible[0].small=false; incompatible[0].modelLabEligible=false; incompatible[1].modelLabArtifactAvailable=false; incompatible[2].modelLabEligible=false
 assert.equal(laboratoryModels({...p,models:incompatible}).length,3)
 assert.equal(laboratoryReady({...p,models:incompatible}).length,0)
 for (const row of incompatible) assert.equal(laboratoryActionAllowed(p,'download',row),false)
 assert.equal(laboratoryReady({...p,models:[{...model('a'),modelLabArtifactInstalled:false}]}).length,0)
 assert.equal(laboratoryActionAllowed({...p,configuration:{...p.configuration,enabled:true}},'delete',p.models[0]),false)
 assert.equal(laboratoryActionAllowed(p,'delete',p.models[0]),true)
+const mixed = {...p, models:[model('a'), {...model('b','v16'),small:false}]}
+assert.equal(laboratoryReady(mixed).length,2)
+assert.equal(laboratorySelectionError(mixed,mixed.configuration),'')
+assert.equal(laboratoryActionAllowed(mixed,'delete',mixed.models[1]),false)
+const twoBig = {...p, models:p.models.map(m => ({...m,small:false,modelLabChestnut:true}))}
+assert.match(laboratorySelectionError(twoBig,twoBig.configuration), /Two Big models cannot/)
+assert.equal(laboratoryActionAllowed(twoBig,'enable',null,twoBig.configuration),false)
+assert.equal(laboratorySelectionError(mixed,mixed.configuration),'')
+const nativeOnly = {...p, models:p.models.map(m => ({...m,modelLabChestnut:false}))}
+assert.match(laboratorySelectionError(nativeOnly,nativeOnly.configuration), /at least one.*Chestnut/)
+assert.equal(laboratoryActionAllowed(nativeOnly,'enable',null,nativeOnly.configuration),false)
+assert.equal(laboratoryActionAllowed(nativeOnly,'delete',nativeOnly.models[0]),false)
 const missing = {...model('c'),modelLabArtifactInstalled:false}
 assert.equal(laboratoryActionAllowed({...p,chestnutReady:false,models:[missing]},'download',missing),true)
 assert.equal(laboratoryActionAllowed({...p,download:{downloading:true,jobId:'job'}},'cancel'),true)
@@ -60,11 +72,21 @@ assert.equal(download.requests[1].url,'./api/models/laboratory/download');assert
 await download.reply(1,{message:'Starting download'});await download.reply(2,{...p,download:{downloading:true,jobId:'job',progress:'40%'}});await downloading
 const canceling=download.feed.action('cancel');assert.equal(download.requests[3].url,'./api/models/cancel');assert.deepEqual(JSON.parse(download.requests[3].options.body),{jobId:'job'})
 await download.reply(3,{message:'Cancelling'});await download.reply(4,p);await canceling;download.feed.stop()
-assert.ok(LaboratoryPage.template.indexOf('Available models')<LaboratoryPage.template.indexOf('Compose a pair'))
+assert.deepEqual([...LaboratoryPage.template.matchAll(/class="gx-section__title">([^<]+)<\/span>/g)].map(match => match[1]),
+  ['Compose a pair', 'Available models'])
+for (const label of ['Lateral model', 'Longitudinal model', 'Enable model pair', 'Check model catalog']) {
+  const position = LaboratoryPage.template.indexOf(label)
+  assert.ok(position >= 0 && position < LaboratoryPage.template.indexOf('v-for="m in availableModels"'),
+    `${label} must appear before the model catalog`)
+}
+assert.doesNotMatch(LaboratoryPage.template,/runtimeState|modelLabel\(status\?\.runtime/ )
+assert.match(LaboratoryPage.template,/status\?\.runtime.error/)
 assert.match(LaboratoryPage.template,/GalaxySelect/)
 assert.match(LaboratoryPage.template,/Catalog models/)
 assert.match(LaboratoryPage.template,/modelLabReason/)
 assert.equal(laboratoryStatusLabel({modelLabStatus:"runtime-unavailable"}), "Downloaded")
 assert.equal(laboratoryStatusLabel({modelLabStatus:"unsupported"}), "Not supported")
-assert.doesNotMatch(LaboratoryPage.template,/20 Hz/)
+const performanceNotice = 'Two Big models cannot run together at the required speed. Choose a Small model for one role. Other combinations can also cause model lag warnings.'
+assert.ok(LaboratoryPage.template.includes(performanceNotice))
+assert.doesNotMatch(LaboratoryPage.template.replace(performanceNotice,''),/20 Hz/)
 console.log('Model Laboratory contracts passed')

@@ -6,6 +6,7 @@ from openpilot.starpilot.ui.raylib import rl
 
 from openpilot.starpilot.ui.onroad_state import ObservationKind, OnroadState, slc_accept_available
 from openpilot.starpilot.ui.unified_speed_presentation import displayed_limit_mps
+from openpilot.starpilot.speed_limits.acceptance import CONFIRMATION_NS
 
 
 CONFIRMATION_PULSES = ((0.0, .7), (.9, .7))
@@ -37,18 +38,22 @@ class SpeedLimitPulse:
         self.last_limit = limit
       return
     if not pending:
-      if (not observation.action_enabled and observation.kind == ObservationKind.VALID and
-          limit != self.last_limit):
+      live = (observation.kind == ObservationKind.VALID and observation.status != 'display_hold' and
+              not observation.sign_recovering)
+      if live and not observation.action_enabled and limit != self.last_limit:
         self.start_time = now
         self.display_pulsing = True
-      elif not self.display_pulsing or observation.action_enabled:
+      # Finish an already-started highlight for the same visible valid sign.
+      # Source hold/recovery and automatic adoption are not new animations.
+      elif (observation.kind != ObservationKind.VALID or limit != self.last_limit or
+            not self.display_pulsing):
         self.start_time = -math.inf
         self.display_pulsing = False
       self.manual_pending = False
       self.last_limit = limit
       return
-    self.display_pulsing = False
     manual = not observation.automatic_adoption_pending and slc_accept_available(state)
+    self.display_pulsing = not manual
     if observation.pending_since_ns > 0:
       self.start_time = observation.pending_since_ns / 1e9
     elif limit != self.last_limit or manual != self.manual_pending or not math.isfinite(self.start_time):
@@ -58,7 +63,7 @@ class SpeedLimitPulse:
 
   def confirmation_strength(self, now: float) -> float:
     elapsed = now - self.start_time
-    if not self.manual_pending or not 0 <= elapsed < 10:
+    if not self.manual_pending or not 0 <= elapsed < CONFIRMATION_NS / 1e9:
       return 0.0
     phase = elapsed % CONFIRMATION_CYCLE_SECONDS
     for start, duration in CONFIRMATION_PULSES:

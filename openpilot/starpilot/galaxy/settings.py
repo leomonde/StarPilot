@@ -13,7 +13,7 @@ import threading
 import time
 from typing import Protocol, cast
 
-from openpilot.starpilot.ui.feature_settings_owner import FeatureSettingsOwner
+from openpilot.starpilot.ui.feature_settings_owner import FeatureSettingsOwner, AGGRESSIVE_COOLING_KEY
 from openpilot.starpilot.galaxy.setting_descriptions import description
 from openpilot.starpilot.galaxy.localization_settings import LocalizationSettingsOwner
 from openpilot.starpilot.ui.controller_feature import SETUP_ACTION, SETUP_QUESTION
@@ -42,17 +42,17 @@ from openpilot.starpilot.ui.vasm_owner import ANNOTATION as VASM_ANNOTATION, RES
 PAGES = frozenset(("hub", "localization", "developer", "vehicle", "slc", "lane", "lane_change", "profiles", "personalities",
                    "traffic", "aggressive", "standard", "relaxed",
                    "curve", "torque", "tuning", "torque/bluepilot", "aol", "wheel", "appearance", "display", "data", "power", "sounds", "pip", "sentry", "vasm",
-                   "conditional", "conditional/cem", "conditional/ccm",
+                   "conditional", "conditional/cem",
                    *(f"{name}/{category}" for name in ("traffic", "aggressive", "standard", "relaxed")
                      for category in ("acceleration", "braking", "following"))))
-CONFIRM_ACTIONS = FEATURE_CONFIRM_ACTIONS | {DRIVER_MONITORING_RESET, CALIBRATION_RESET}
+CONFIRM_ACTIONS = (FEATURE_CONFIRM_ACTIONS - {SETUP_ACTION}) | {DRIVER_MONITORING_RESET, CALIBRATION_RESET}
 MAX_VIEWS = 64
 MAX_INTENTS = 64
 TTL = 60.0
 
 # Android Auto lists binary controls only.
 CAR_CONTROL_SECTIONS = (
-  ("lateral", "Lateral (Steering)", ("aol", "lane_change", "torque", "lane")),
+  ("lateral", "Lateral (Steering)", ("aol", "lane_change", "torque", "lane", "vehicle")),
   ("longitudinal", "Longitudinal (Speed & Following)",
    ("profiles", "conditional", "curve", "slc", "aggressive", "standard", "relaxed", "traffic")),
   ("wheel", "Wheel Controls", ("wheel",)),
@@ -394,7 +394,8 @@ def _projection(row: FeatureRow) -> dict:
           "repairValue": row.repair_value, "defaultValue": row.default_value, "resetAvailable": row_default(row) is not None,
           "displayScale": "lane-strength" if row.key == "LaneCenteringStrength" else None,
           **({"coordinate": row.key.removeprefix("torque:surface:")} if row.key.startswith("torque:surface:") and row.key != "torque:surface:reset" else {}),
-          "heading": is_heading(row.key)}
+          "heading": is_heading(row.key), "collapsed": bool(row.collapsed),
+          **({"previewSound": row.key} if row.key in SOUND_SPECS else {})}
 
 
 def _question(row: FeatureRow, request: FeatureSettingsRequest) -> str:
@@ -638,7 +639,9 @@ class SettingsGateway:
                            minimum=1 if row.key == HOURS else 11.8, maximum=30 if row.key == HOURS else 12.5,
                            step=1 if row.key == HOURS else 0.1, unit="h" if row.key == HOURS else "V")
                    if row.key in (HOURS, VOLTS) else row for row in state.rows)
-      return replace(state, rows=rows)
+      cooling = self._owner(ctx).snapshot("power", parked=ctx.parked, system_long=False, lateral_context=False,
+                                          metric=ctx.metric, configure_while_driving=True)
+      return replace(state, title="Power and Cooling", rows=rows + tuple(cooling.rows))
     if page == "display":
       return self._display_owner(ctx).snapshot(Profile.COMPACT if HARDWARE.get_device_type() == "mici" else Profile.LARGE)
     if page == "pip":
@@ -651,6 +654,8 @@ class SettingsGateway:
                                       system_long=_qualified(ctx, "long"),
                                       lateral_context=_qualified(ctx, "lane") or (page == "lane" and _qualified(ctx, "lane_live")),
                                       metric=ctx.metric, configure_while_driving=True)
+    if page == "torque":
+      state = replace(state, rows=tuple(row for row in state.rows if row.key not in ("torque:factor:reset", "torque:friction:reset")))
     if ctx.editing_saved_vehicle:
       from opendbc.car.values import PLATFORMS
       platform = PLATFORMS[ctx.cp.carFingerprint]
@@ -854,7 +859,7 @@ class SettingsGateway:
       return self._appearance_owner(ctx, live=True, session_valid=session_valid).apply(intent.request)
     if intent.page == "sounds":
       return self._sounds_owner(ctx, live=True, session_valid=session_valid).apply(intent.request)
-    if intent.page == "power":
+    if intent.page == "power" and intent.request.key != AGGRESSIVE_COOLING_KEY:
       return self._power_owner(ctx, live=True, session_valid=session_valid).apply(_power_request(intent.request))
     if intent.page == "display":
       return self._display_owner(ctx, live=True, session_valid=session_valid).apply(intent.request)

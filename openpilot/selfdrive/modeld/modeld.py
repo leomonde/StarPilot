@@ -41,7 +41,9 @@ from openpilot.system.camerad.cameras.nv12_info import get_nv12_info
 from openpilot.common.transformations.model import get_warp_matrix
 from openpilot.selfdrive.controls.lib.desire_helper import DesireHelper
 from openpilot.starpilot.lateral.lane_change_preferences import LiveLaneChangePolicy
-from openpilot.starpilot.lateral.auto_lane_change import ClockEpochGuard, auto_evidence, paired_clocks_ns, session_policy, steering_capable
+from openpilot.starpilot.lateral.auto_lane_change import (
+  ClockEpochGuard, auto_evidence, auto_trigger_engaged, paired_clocks_ns, session_policy, steering_capable,
+)
 from openpilot.starpilot.lateral.lane_change_status_wire import (
   Direction as StatusDirection, LaneChangeStatus, Phase as StatusPhase, encode_optional as encode_lane_status,
 )
@@ -314,7 +316,19 @@ def main(demo=False):
   recovery_small_only = os.getenv("STARPILOT_MODELD_RECOVERY_SMALL_ONLY") == "1"
   selection = resolve_runtime(chestnut_available=chestnut_available and not recovery_small_only, randomize=not recovery_small_only)
   requested_model_id = requested_runtime_id(chestnut_available)
-  CHESTNUT = selection.allow_big and selection.big_path is not None
+  from openpilot.starpilot.models.laboratory import freeze_request
+  from openpilot.starpilot.models.laboratory_runner import LaboratoryPair, load_laboratory_pair
+  from openpilot.starpilot.models.runtime_bridge.runtime import bind_laboratory_request
+  from openpilot.starpilot.models.manager import ROOT as MODEL_ROOT
+  laboratory_request = None
+  if chestnut_available and not recovery_small_only:
+    try:
+      laboratory_request = freeze_request(MODEL_ROOT)
+      if laboratory_request is not None:
+        bind_laboratory_request(laboratory_request)
+    except (OSError, ValueError):
+      cloudlog.exception("Model Laboratory request unavailable; using the normal model")
+  CHESTNUT = laboratory_request is not None or selection.allow_big and selection.big_path is not None
   if CHESTNUT:
     from tinygrad.runtime.support.am import startup_trace
     startup_trace.ENABLED = True
@@ -390,11 +404,11 @@ def main(demo=False):
   # A timed-out GPU worker must never hold up access to the small runner.
   small_model = small_prepared = None
   selected_small_failed = False
-  if selection.big_path is not None and selection.small_path is not None:
+  if laboratory_request is not None or selection.big_path is not None and selection.small_path is not None:
     small_model, small_prepared, selected_small_failed = load_small()
   if CHESTNUT:
     big_path = selection.big_path or modeld_pkl_path(True)
-    big_artifact_identity = receipt_owner.capture(big_path)
+    big_artifact_identity = receipt_owner.capture(big_path) if laboratory_request is None else None
     big_model = None
     def load_big():
       nonlocal big_model, big_prepared
@@ -403,7 +417,11 @@ def main(demo=False):
         if not demo:
           wait_for_chestnut_power(CP, timeout=min(30., BIG_MODEL_TIMEOUT / 2))
         set_core_affinity([7])
-        if selection.big_path is not None:
+        if laboratory_request is not None:
+          config = {key: laboratory_request[key] for key in ('enabled', 'lateralModel', 'longitudinalModel')}
+          m = load_laboratory_pair(cam_w, cam_h, config, root=MODEL_ROOT)
+          prepared = None
+        elif selection.big_path is not None:
           m, prepared = load_verified_model(cam_w, cam_h,
                                             big_path, selection.big_version, True, selection.big_id, selection.big_sha256)
         else:
@@ -433,12 +451,18 @@ def main(demo=False):
   initial_chestnut_fallback = CHESTNUT and model is None
   if model is None:
     model = small_model
-  receipt_owner.loaded(big_prepared if model.chestnut else small_prepared,
-                       ModelVariant.CHESTNUT if model.chestnut else ModelVariant.SMALL,
-                       "chestnut-run-stalled" if recovery_small_only else
-                       "chestnut-load-failed" if initial_chestnut_fallback else
-                       "selected-load-failed" if (selected_small_failed and not model.chestnut) or requested_model_id != model.model_id else None,
-                       model_id=model.model_id)
+  if isinstance(model, LaboratoryPair):
+    import hashlib
+    import json
+    request_sha256 = hashlib.sha256(json.dumps(laboratory_request, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    receipt_owner.loaded_pair(model, request_sha256)
+  else:
+    receipt_owner.loaded(big_prepared if model.chestnut else small_prepared,
+                         ModelVariant.CHESTNUT if model.chestnut else ModelVariant.SMALL,
+                         "chestnut-run-stalled" if recovery_small_only else
+                         "chestnut-load-failed" if initial_chestnut_fallback else
+                         "selected-load-failed" if (selected_small_failed and not model.chestnut) or requested_model_id != model.model_id else None,
+                         model_id=model.model_id)
   HOOKS = jetlink_adapter.hooks()
   jetlink_model = None
   # before going realtime: the GPU thread it starts would inherit SCHED_FIFO 54 on core 7
@@ -530,7 +554,8 @@ def main(demo=False):
       meta_extra = meta_main
 
     sm.update(0)
-    turn_supported = bool(model.npy.get('desire') is not None and model.npy['desire'].shape[-1] == 8)
+    turn_models = (model.lateral, model.longitudinal) if isinstance(model, LaboratoryPair) else (model,)
+    turn_supported = all(state.npy.get('desire') is not None and state.npy['desire'].shape[-1] == 8 for state in turn_models)
     desire = navigation_turn.select(sm, time.monotonic_ns(), DH.desire,
                                      supported=turn_supported, model_stop=bool(prev_action.shouldStop))
     is_rhd = sm["driverMonitoringState"].isRHD
@@ -580,7 +605,7 @@ def main(demo=False):
     if not sm['carControl'].latActive:
       prev_action.desiredCurvature = sm['controlsState'].curvature
 
-    if isinstance(model, CatalogModelState) or model is jetlink_model:
+    if isinstance(model, (CatalogModelState, LaboratoryPair)) or model is jetlink_model:
       inputs['prev_action'] = np.array([prev_action.desiredCurvature * max(1.0, v_ego) ** 2,
                                         prev_action.desiredAcceleration], dtype=np.float32)
       inputs['lateral_control_params'] = np.array([v_ego, lat_delay], dtype=np.float32)
@@ -592,6 +617,8 @@ def main(demo=False):
       send_chestnut = (chestnut_state is not None and
                        run_count % round(ModelConstants.MODEL_RUN_FREQ / SERVICE_LIST['chestnutGpuState'].frequency) == 0)
       model_output = model.run(bufs, transforms, inputs, chestnut_state.send if send_chestnut else None)
+      laboratory_action = (model.get_action_from_model(model_output, prev_action, lat_action_t, long_action_t, v_ego)
+                           if isinstance(model, LaboratoryPair) else None)
     except Exception:
       if not model.chestnut:
         raise
@@ -626,7 +653,11 @@ def main(demo=False):
       drivingdata_send = messaging.new_message('drivingModelData')
       posenet_send = messaging.new_message('cameraOdometry')
 
-      action = model.get_action_from_model(model_output, prev_action, lat_action_t, long_action_t, v_ego)
+      if isinstance(model, LaboratoryPair):
+        assert laboratory_action is not None
+        action = laboratory_action
+      else:
+        action = model.get_action_from_model(model_output, prev_action, lat_action_t, long_action_t, v_ego)
       filter_action(action, prev_action, v_ego, subaru_tau)
       prev_action = action
       fill_model_msg(modelv2_send, model_output, action,
@@ -649,7 +680,8 @@ def main(demo=False):
                                   model_valid=bool(modelv2_send.valid), vehicle_capable=auto_vehicle_capable))
       engaged = bool(sm['carControl'].latActive)
       DH.update(car_state, sm['carControl'].latActive, lane_change_prob,
-                auto_evidence=auto_ready, engaged=engaged,
+                auto_evidence=auto_ready, engaged=auto_trigger_engaged(sm, runtime_lane_policy,
+                  openpilot_longitudinal=bool(CP.openpilotLongitudinalControl), now_mono_ns=mono_now_ns),
                 navigation_turn=matching_turn_signal(sm, mono_now_ns, supported=turn_supported))
       modelv2_send.modelV2.meta.laneChangeState = DH.lane_change_state
       modelv2_send.modelV2.meta.laneChangeDirection = DH.lane_change_direction
