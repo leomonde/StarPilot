@@ -31,7 +31,10 @@ from openpilot.starpilot.aol.tests.stock_lateral_test_helpers import authority_c
 @pytest.mark.parametrize('fixed', (False,))
 def test_mqb_full_engagement_brake_reverse_drive_actual_callers(gearbox, alpha, offset, fixed, engage_on_set,
                                                                stop_and_resume=False, candidate=CAR.VOLKSWAGEN_GOLF_MK7,
-                                                               brake_held_engagement=False, creep_start=False, early_brake=False):
+                                                               brake_held_engagement=False, creep_start=False, early_brake=False,
+                                                               parked_boot=False, cruise_cancel=False, main_cycle=False,
+                                                               pq_eps_pause=False, pq_real_fault=False):
+  pq = candidate == CAR.VOLKSWAGEN_SHARAN_MK2
   with ExitStack() as cleanup:
     cleanup.enter_context(OpenpilotPrefix())
     cleanup.enter_context(mock.patch.dict('os.environ', {'SIMULATION': '0', 'AOL_REPLAY_RUNTIME': '1'}))
@@ -42,8 +45,8 @@ def test_mqb_full_engagement_brake_reverse_drive_actual_callers(gearbox, alpha, 
     params.put_bool('AlphaLongitudinalEnabled', alpha, block=True)
     fp = {bus: {} for bus in range(8)}
     if gearbox != 'manual':
-      fp[offset][0xAD if gearbox == 'automatic' else 0x187] = 8
-    fp[offset + 1][0xFD] = 8
+      fp[offset][0x440 if pq else 0xAD if gearbox == 'automatic' else 0x187] = 8
+    fp[offset + 1][0x1A0 if pq else 0xFD] = 8
     if stop_and_resume or brake_held_engagement:
       fp[offset + 2][0x126] = 8
       fp[offset][0x6B8] = 8
@@ -78,6 +81,7 @@ def test_mqb_full_engagement_brake_reverse_drive_actual_callers(gearbox, alpha, 
     sd, controls, step = case._authority_callers(False, cp=cp, genuine_events=True)
     card = card_module.Car(CI=CarInterface(card_cp), RI=CarInterface.RadarInterface(card_cp))
     assert card.CP.to_dict() == sd.CP.to_dict()
+    sd.aol_settings = card.aol_settings
     if offset:
       original_update = sd.sm.update_msgs
       def measured_pandas(timestamp, messages):
@@ -146,17 +150,17 @@ def test_mqb_full_engagement_brake_reverse_drive_actual_callers(gearbox, alpha, 
     cleanup.callback(native.init_tests)
     native.init_tests()
     native.set_alternative_experience(32)
-    native.set_safety_hooks(15, (24 if gearbox == 'manual' else 40 if gearbox == 'direct' else 8) | int(alpha))
-    native.set_aol_test_heartbeat(True)
+    native.set_safety_hooks(21 if pq else 15, (24 if gearbox == 'manual' else 40 if gearbox == 'direct' else 8) | int(alpha))
+    native.set_aol_test_heartbeat(not parked_boot)
     card.CI.update([])
-    dbc = ParsedDBC('vw_mqb')
-    packer = CANPacker('vw_mqb')
+    dbc = ParsedDBC('vw_pq' if pq else 'vw_mqb')
+    packer = CANPacker('vw_pq' if pq else 'vw_mqb')
     emitted, lat_commands, long_commands = [], [], []
     request = 0
     for tick in range(120):
       now = 10_000_000_000 + tick * 10_000_000
       native.set_timer(1_000_000 + tick * 10_000)
-      if creep_start and tick >= 12:
+      if parked_boot or main_cycle or creep_start and tick >= 12:
         native.set_aol_test_heartbeat(bool(card.aol_card_intent.allowed_latch or request))
       if quiet is not None:
         quiet.set_timer(1_000_000 + tick * 10_000)
@@ -167,9 +171,9 @@ def test_mqb_full_engagement_brake_reverse_drive_actual_callers(gearbox, alpha, 
 
       brake = (60 if early_brake else 65) <= tick < 75 or (brake_held_engagement and tick < 29)
       reverse = 85 <= tick < 95
-      ordinary = engage_on_set and 21 <= tick < 65
+      ordinary = engage_on_set and 21 <= tick < (55 if cruise_cancel else 65)
       overrides = {
-        'TSK_06': {'TSK_Status': 3 if ordinary and not alpha else 2},
+        'TSK_06': {'TSK_Status': 0 if main_cycle and 45 <= tick < 50 else 3 if ordinary and not alpha else 2},
         'LH_EPS_03': {'EPS_HCA_Status': 3, 'EPS_Lenkmoment': 100 if early_brake and 52 <= tick <= 61 else 0},
         'Motor_20': {'MO_Fahrpedalrohwert_01': 0},
         'Motor_14': {'MO_Fahrer_bremst': int(brake), 'MO_Kuppl_schalter': 0},
@@ -179,16 +183,32 @@ def test_mqb_full_engagement_brake_reverse_drive_actual_callers(gearbox, alpha, 
         'Motor_EV_01': {'MO_Waehlpos': 3 if reverse else 5},
         'ESP_19': dict.fromkeys(('ESP_VL_Radgeschw_02', 'ESP_VR_Radgeschw_02', 'ESP_HL_Radgeschw_02', 'ESP_HR_Radgeschw_02'),
                                       (72 if tick < 12 else 0 if tick < 20 else 1 if tick < 24 else 2 if tick < 46 else 72) if creep_start else
-                                      0 if (stop_and_resume and 45 <= tick < 56) or (brake_held_engagement and tick < 30) else 72),
+                                      0 if (stop_and_resume and 45 <= tick < 56) or (brake_held_engagement and tick < 30) else
+                                      0 if parked_boot and tick < 30 else 72),
         'Airbag_02': {'AB_Gurtschloss_FA': 0 if 105 <= tick < 111 else 3},
-        'GRA_ACC_01': {'GRA_Hauptschalter': 1, 'GRA_Tip_Setzen': int(engage_on_set and (tick in (20, 50) if creep_start else tick == 20))},
+        'GRA_ACC_01': {'GRA_Abbrechen': int(cruise_cancel and tick == 55), 'GRA_Hauptschalter': int(not main_cycle or not 45 <= tick < 50),
+                       'GRA_Tip_Setzen': int(engage_on_set and (tick in (20, 50) if creep_start else tick == 20))},
         'ACC_02': {'ACC_Gesetzte_Zeitluecke': 1},
       }
+      if pq:
+        overrides = {
+          'Motor_2': {'MO2_Sta_GRA': int(ordinary and not alpha), 'MO2_BLS': int(brake)},
+          'Motor_3': {'MO3_Pedalwert': 0},
+          'Motor_5': {'MO5_GRA_Hauptsch': int(not main_cycle or not 45 <= tick < 50)},
+          'Lenkhilfe_2': {'LH2_Sta_HCA': 2 if pq_real_fault and tick == 60 else 4 if pq_eps_pause and 45 <= tick < 50 else 3},
+          'Lenkhilfe_3': {'LH3_LM': 100 if early_brake and 52 <= tick <= 61 else 0},
+          'Getriebe_1': {'GE1_Wahl_Pos': 7 if reverse else 5},
+          'Bremse_1': {'BR1_Rad_kmh': 0 if (parked_boot or brake_held_engagement) and tick < 30 else 72},
+          'Airbag_1': {'Gurtschalter_Fahrer': int(not 105 <= tick < 111)},
+          'GRA_Neu': {'GRA_Abbrechen': int(cruise_cancel and tick == 55),
+                      'GRA_Hauptschalt': int(not main_cycle or not 45 <= tick < 50),
+                      'GRA_Neu_Setzen': int(engage_on_set and tick == 20)},
+        }
       incoming = []
       for parser in card.CI.can_parsers.values():
         for name in tuple(parser.vl):
           if isinstance(name, str) and name in dbc.name_to_msg:
-            if tick < 3 and name in ('TSK_06', 'LH_EPS_03'):
+            if tick < 3 and name in (('Motor_5', 'Lenkhilfe_2') if pq else ('TSK_06', 'LH_EPS_03')):
               continue  # Real startup may receive other CAN sources before cruise and EPS.
             fields: dict[str, float] = dict(overrides.get(name, {}))
             if 'COUNTER' in dbc.name_to_msg[name].sigs:
@@ -200,7 +220,9 @@ def test_mqb_full_engagement_brake_reverse_drive_actual_callers(gearbox, alpha, 
       native.aol_set_host_request(request)
       permission = native.aol_get_permission_mask()
       if early_brake and tick == 60:
-        incoming = [(address, data, bus) for address, data, bus in incoming if address not in (0x106, 0x3BE)]
+        incoming = [(address, data, bus) for address, data, bus in incoming if address not in ((0x288,) if pq else (0x106, 0x3BE))]
+        if pq_real_fault:
+          incoming = [(address, data, bus) for address, data, bus in incoming if address != 0x3D2]
         assert not native.get_controls_allowed() and not permission & 2
       original_message = messaging.new_message
       def clocked_card_message(*args, original_message=original_message, now=now, **kwargs):
@@ -218,6 +240,8 @@ def test_mqb_full_engagement_brake_reverse_drive_actual_callers(gearbox, alpha, 
         card.state_publish(state, radar)
       if tick >= 15:
         assert state.canValid and not state.canTimeout
+      if parked_boot and 15 <= tick < 30:
+        assert not card.aol_card_intent.allowed_latch, 'VW_PARKED_START_CONSUMED_MAIN_ARM'
       intent = card.pm.messages['aolIntentWire'].as_builder()
       axis, selfdrive, command = step(tick, observed_state=state, intent_message=intent,
         gas=state.gasPressed, steering=state.steeringPressed, brake=state.brakePressed,
@@ -226,6 +250,10 @@ def test_mqb_full_engagement_brake_reverse_drive_actual_callers(gearbox, alpha, 
         panda_controls_allowed=native.get_controls_allowed())
       if early_brake and tick == 60:
         assert not state.brakePressed and state.steeringPressed
+        if pq_real_fault:
+          assert permission == 0 and log.OnroadEvent.EventName.controlsMismatch in sd.events.names
+          assert not command.latActive and not command.longActive
+          return
         assert log.OnroadEvent.EventName.controlsMismatch not in sd.events.names, 'VW_EARLY_BRAKE_STEERING_MISMATCH'
         assert not command.longActive
         assert card.aol_card_intent.allowed_latch
@@ -235,6 +263,26 @@ def test_mqb_full_engagement_brake_reverse_drive_actual_callers(gearbox, alpha, 
         assert not command.longActive and not (permission & 2)
       if brake_held_engagement and 38 <= tick < 45:
         assert command.longActive and axis.longitudinalActive and permission & 2, "VW_BRAKE_RELEASE_NO_LONG"
+      if parked_boot and tick < 30:
+        assert not command.latActive and not command.longActive
+        assert log.OnroadEvent.EventName.controlsMismatch not in sd.events.names
+      if cruise_cancel and 58 <= tick < 65:
+        assert card.aol_card_intent.allowed_latch, 'VW_CANCEL_CLEARED_LATERAL_INTENT'
+        assert command.latActive and permission & 1, 'VW_CANCEL_WITHDREW_LATERAL_PERMISSION'
+        assert not command.longActive and not permission & 2, 'VW_CANCEL_RESTORED_LONG'
+      if main_cycle and 62 <= tick < 65:
+        assert card.aol_card_intent.allowed_latch
+        assert command.latActive, 'VW_MAIN_ON_REQUIRES_SET_AFTER_HEARTBEAT_WITHDRAWAL'
+        assert not command.longActive
+      if pq_eps_pause and 46 <= tick < 50:
+        assert state.steerFaultTemporary and not command.latActive
+        assert card.aol_card_intent.allowed_latch
+      if pq_eps_pause and 51 <= tick < 60:
+        assert not command.latActive  # Await the next genuine 10 Hz native acknowledgment.
+      if pq_eps_pause and 62 <= tick < 65:
+        assert command.latActive and permission & 1, (tick, permission, request, state.to_dict(), axis.to_dict(),
+          list(sd.events.names), card.aol_card_intent.allowed_latch, card.aol_card_intent._fault_inhibit)
+        assert log.OnroadEvent.EventName.controlsMismatch not in sd.events.names
       if tick >= 112:
         assert command.driverMonitoringEscalation
       if stop_and_resume and 45 <= tick < 56:
@@ -266,7 +314,12 @@ def test_mqb_full_engagement_brake_reverse_drive_actual_callers(gearbox, alpha, 
         card.controls_update(state, card.sm['carControl'])
       for addr, data, bus in sent:
         assert offset <= bus < offset + 4
-        assert native.safety_tx_hook(make_msg(bus - offset, addr, dat=data)), (tick, hex(addr), data.hex(), bus)
+        accepted = native.safety_tx_hook(make_msg(bus - offset, addr, dat=data))
+        if pq and main_cycle and alpha and 45 <= tick < 50 and addr == 0x368:
+          # Physical MAIN withdrawal precedes the next 10 Hz host acknowledgment.
+          assert not accepted and not native.get_controls_allowed() and not permission & 2
+        else:
+          assert accepted, (tick, hex(addr), data.hex(), bus)
       if quiet is not None:
         for addr, data, bus in sent:
           assert not quiet.safety_tx_hook(make_msg(bus - offset, addr, dat=data))
@@ -348,3 +401,56 @@ def test_native_brake_precedes_parsed_pedal_during_driver_steering(gearbox):
   test_mqb_full_engagement_brake_reverse_drive_actual_callers(
     gearbox, True, 0, False, True, early_brake=True,
     candidate=CAR.SEAT_ATECA_MK1 if gearbox == 'automatic' else CAR.VOLKSWAGEN_GOLF_MK7)
+
+
+@pytest.mark.parametrize('gearbox', ('automatic', 'manual', 'direct'))
+@pytest.mark.parametrize('alpha', (False, True))
+def test_mqb_parked_main_start_waits_for_steering_speed_without_set(gearbox, alpha):
+  test_mqb_full_engagement_brake_reverse_drive_actual_callers(gearbox, alpha, 0, False, False, parked_boot=True)
+
+
+@pytest.mark.parametrize('gearbox', ('automatic', 'manual', 'direct'))
+@pytest.mark.parametrize('alpha', (False, True))
+def test_mqb_default_cancel_withdraws_only_cruise_actual_callers(gearbox, alpha):
+  test_mqb_full_engagement_brake_reverse_drive_actual_callers(gearbox, alpha, 0, False, True, cruise_cancel=True)
+
+
+@pytest.mark.parametrize('gearbox', ('automatic', 'manual', 'direct'))
+@pytest.mark.parametrize('alpha', (False, True))
+def test_mqb_main_cycle_without_set_recovers_only_lateral_actual_callers(gearbox, alpha):
+  test_mqb_full_engagement_brake_reverse_drive_actual_callers(gearbox, alpha, 0, False, False, main_cycle=True)
+
+
+@pytest.mark.parametrize('alpha', (False, True))
+@pytest.mark.parametrize('offset,fixed', ((0,False), (4,True)))
+def test_pq_factory_parser_card_control_native_actual_callers(alpha, offset, fixed):
+  test_mqb_full_engagement_brake_reverse_drive_actual_callers(
+    'automatic', alpha, offset, fixed, True, candidate=CAR.VOLKSWAGEN_SHARAN_MK2)
+
+
+@pytest.mark.parametrize('alpha', (False, True))
+@pytest.mark.parametrize('scenario', ('parked_boot', 'cruise_cancel', 'main_cycle'))
+def test_pq_main_and_cancel_actual_callers(alpha, scenario):
+  test_mqb_full_engagement_brake_reverse_drive_actual_callers(
+    'automatic', alpha, 0, False, scenario != 'parked_boot', candidate=CAR.VOLKSWAGEN_SHARAN_MK2, **{scenario: True})
+
+
+@pytest.mark.parametrize('alpha', (False, True))
+def test_pq_aol_eps_pause_and_recovery_actual_callers(alpha):
+  test_mqb_full_engagement_brake_reverse_drive_actual_callers(
+    'automatic', alpha, 0, False, False, candidate=CAR.VOLKSWAGEN_SHARAN_MK2, pq_eps_pause=True)
+
+
+def test_pq_early_native_brake_with_driver_steering_actual_callers():
+  test_mqb_full_engagement_brake_reverse_drive_actual_callers(
+    'automatic', True, 0, False, True, candidate=CAR.VOLKSWAGEN_SHARAN_MK2, early_brake=True)
+
+
+def test_pq_real_native_eps_fault_is_not_ordinary_long_withdrawal():
+  test_mqb_full_engagement_brake_reverse_drive_actual_callers(
+    'automatic', True, 0, False, True, candidate=CAR.VOLKSWAGEN_SHARAN_MK2, early_brake=True, pq_real_fault=True)
+
+
+def test_pq_brake_held_standstill_engagement_actual_callers():
+  test_mqb_full_engagement_brake_reverse_drive_actual_callers(
+    'automatic', True, 0, False, True, candidate=CAR.VOLKSWAGEN_SHARAN_MK2, brake_held_engagement=True)

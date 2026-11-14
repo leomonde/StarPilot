@@ -149,9 +149,23 @@ export class OnroadLayoutFeed {
   }
 }
 
+// Which map and route provider the comma uses, so the navigation previews match what it draws.
+export const navLook = reactive({ map: "mapbox", routes: "mapbox" })
+export async function loadNavLook(fetcher = (...args) => fetch(...args)) {
+  try {
+    const response = await fetcher("./api/navigation/status", { credentials: "same-origin", cache: "no-store" })
+    const data = response.ok ? await response.json() : null
+    navLook.map = data?.mapProvider === "google" && data.hasGoogleKey ? "google" : "mapbox"
+    navLook.routes = data?.routeProvider === "google" && data.hasGoogleKey ? "google" : "mapbox"
+  } catch { /* The Mapbox look stays when navigation is unreachable. */ }
+}
+
 export const LayoutWidgetPreview = {
   props: ["widget", "palette", "profile", "scene", "clock24Hour", "native", "art"],
   computed: {
+    nav() { return navLook },
+    googleMap() { return navLook.map === "google" },
+    googleRoutes() { return navLook.routes === "google" },
     roadNameSize() { return Math.max(18, Math.min(this.widget.width, this.widget.height) * .075) },
   },
   methods: {
@@ -210,15 +224,39 @@ export const LayoutWidgetPreview = {
           :font-size="profile === 'large' ? 48 : 21" font-weight="600"
           style="filter: drop-shadow(2px 2px 1px #000000aa)">{{ clock24Hour ? '18:00' : '12:00 PM' }}</text>
       </template>
+      <g v-else-if="widget.kind === 'now_playing' && widget.size === 'big'">
+        <defs><linearGradient id="gx-np-wash" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8a3a52" /><stop offset=".45" stop-color="#5a2350" /><stop offset="1" stop-color="#22143f" /></linearGradient></defs>
+        <rect x="0" y="0" :width="widget.width" :height="widget.height" rx="40" fill="url(#gx-np-wash)" :fill-opacity="(widget.opacity ?? 85) / 100" />
+        <rect x="40" y="20" width="138" height="36" rx="18" fill="#000000" fill-opacity=".35" stroke="#ffffff" stroke-opacity=".12" />
+        <path d="M61 47 V29 H69 V32 H63.6 V45" fill="#c7aef7" /><circle cx="61" cy="46" r="4.3" fill="#c7aef7" />
+        <text x="82" y="44" font-size="18" font-weight="600" fill="#f5f2fc">StarPilot</text>
+        <text :x="widget.width - 40" y="44" text-anchor="end" font-size="18" fill="#d6d2e0">Spotify</text>
+        <text :x="widget.width / 2" y="92" text-anchor="middle" font-size="30" font-weight="600" fill="#f5f2fc">Midnight City<tspan font-weight="400" fill="#d6d2e0">  •  M83</tspan></text>
+        <rect x="40" y="112" :width="widget.width - 80" height="10" rx="5" fill="#ffffff" fill-opacity=".18" />
+        <rect x="40" y="112" :width="(widget.width - 80) * .38" height="10" rx="5" fill="#ffffff" />
+        <text x="40" y="144" font-size="16" fill="#b8b2c8">1:32</text>
+        <text :x="widget.width - 40" y="144" text-anchor="end" font-size="16" fill="#b8b2c8">4:03</text>
+        <g :transform="'translate(' + (widget.width / 2 - 192) + ' 208)'" fill="none" stroke="#d6d2e0" stroke-width="3.5" stroke-linecap="round">
+          <path d="M-16 -10 C0 -10 0 10 18 10 M-16 10 C0 10 0 -10 18 -10 M13 -16 L19 -10 L13 -4 M13 4 L19 10 L13 16" />
+        </g>
+        <g :transform="'translate(' + (widget.width / 2 - 96) + ' 208)'"><circle r="32" fill="#ffffff" fill-opacity=".14" /><path d="M9 -12 L9 12 L-9 0 Z M-14 -12 H-9 V12 H-14 Z" fill="#f5f2fc" /></g>
+        <g :transform="'translate(' + widget.width / 2 + ' 208)'"><circle r="36" fill="#f5f2fc" /><path d="M-10 -13 H-3 V13 H-10 Z M3 -13 H10 V13 H3 Z" fill="#0f0d17" /></g>
+        <g :transform="'translate(' + (widget.width / 2 + 96) + ' 208)'"><circle r="32" fill="#ffffff" fill-opacity=".14" /><path d="M-9 -12 L-9 12 L9 0 Z M9 -12 H14 V12 H9 Z" fill="#f5f2fc" /></g>
+        <g :transform="'translate(' + (widget.width / 2 + 192) + ' 208)'" fill="none" stroke="#d6d2e0" stroke-width="4" stroke-linecap="round">
+          <path d="M-14 -9 H12 M14 9 H-12 M-16 -11 V4 M16 11 V-4" /><path d="M10 -16 L19 -9 L10 -2 Z M-10 16 L-19 9 L-10 2 Z" fill="#d6d2e0" stroke="none" />
+        </g>
+      </g>
       <g v-else-if="widget.kind === 'now_playing'">
-        <rect x="0" y="0" :width="widget.width" :height="widget.height" :rx="widget.height / 2" fill="#0f0d17" :fill-opacity="(widget.opacity ?? 85) / 100 * .92" />
-        <circle :cx="widget.height / 2" :cy="widget.height / 2" r="30" fill="#c7aef7" />
-        <rect :x="widget.height / 2 - 9" :y="widget.height / 2 - 12" width="6" height="24" rx="3" fill="#0f0d17" />
-        <rect :x="widget.height / 2 + 3" :y="widget.height / 2 - 12" width="6" height="24" rx="3" fill="#0f0d17" />
-        <text :x="widget.height + 4" y="40" font-size="30" font-weight="600" fill="#f5f2fc">Midnight City</text>
-        <text :x="widget.height + 4" y="68" font-size="22" fill="#b8b2c8">M83</text>
-        <rect :x="widget.height + 4" :y="widget.height - 16" :width="widget.width - widget.height * 1.5 - 4" height="4" rx="2" fill="#ffffff" fill-opacity=".2" />
-        <rect :x="widget.height + 4" :y="widget.height - 16" :width="(widget.width - widget.height * 1.5 - 4) * .38" height="4" rx="2" fill="#c7aef7" />
+        <defs><linearGradient id="gx-np-wash-small" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8a3a52" /><stop offset=".45" stop-color="#5a2350" /><stop offset="1" stop-color="#22143f" /></linearGradient></defs>
+        <rect x="0" y="0" :width="widget.width" :height="widget.height" :rx="widget.height / 2" fill="url(#gx-np-wash-small)" :fill-opacity="(widget.opacity ?? 85) / 100" />
+        <circle :cx="widget.height / 2" :cy="widget.height / 2" r="36" fill="#f5f2fc" />
+        <rect :x="widget.height / 2 - 10" :y="widget.height / 2 - 13" width="7" height="26" rx="3" fill="#0f0d17" />
+        <rect :x="widget.height / 2 + 3" :y="widget.height / 2 - 13" width="7" height="26" rx="3" fill="#0f0d17" />
+        <text :x="widget.height + 4" y="42" font-size="26" font-weight="600" fill="#f5f2fc">Midnight City</text>
+        <text :x="widget.height + 4" y="71" font-size="19" fill="#d6d2e0">M83</text>
+        <g :transform="'translate(' + (widget.width - 42) + ' ' + widget.height / 2 + ') scale(1.3)'" fill="#c7aef7">
+          <path d="M0 7 V-11 H8 V-7.8 H2.6 V7" /><circle cx="-3" cy="7" r="5" />
+        </g>
       </g>
       <g v-else-if="widget.kind === 'jetlink_status'">
         <rect x="0" y="0" :width="widget.width" :height="widget.height" :rx="widget.height / 2" fill="#0f0d17" :fill-opacity="(widget.opacity ?? 85) / 100 * .92" />
@@ -280,8 +318,9 @@ export const LayoutWidgetPreview = {
       </g>
       <g v-else-if="widget.kind === 'nav_card'">
         <rect x="1" y="1" :width="widget.width - 2" :height="widget.height - 2" rx="39" fill="#0f0d17f5" stroke="#a07edcbe" stroke-width="2" />
-        <text x="24" y="66" font-size="54" font-weight="700" fill="white">500 ft</text>
-        <text x="24" y="100" font-size="30" font-weight="600" fill="#ded6f4">Turn right onto Las Vegas Blvd</text>
+        <text v-if="!googleRoutes" x="24" y="66" font-size="54" font-weight="700" fill="white">500 ft</text>
+        <text v-if="!googleRoutes" x="24" y="100" font-size="30" font-weight="600" fill="#ded6f4">Turn right onto Las Vegas Blvd</text>
+        <template v-if="!googleRoutes">
         <g v-for="(lane, i) in [['S', 0], ['S', 0], ['S', 0], ['R', 1], ['R', 1]]" :key="i" :transform="'translate(' + ((widget.width - 320) / 2 + i * 66) + ' 116)'">
           <rect width="56" height="44" rx="13" :fill="lane[1] ? '#4e3e80' : '#222030'" />
           <g transform="translate(28 22)" fill="none" :stroke="lane[1] ? '#ffffff' : '#70688a'" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round">
@@ -289,6 +328,13 @@ export const LayoutWidgetPreview = {
             <path v-else d="M-8 13 V0 Q-8 -7 -1 -7 H10 M4 -13 L10 -7 L4 -1" />
           </g>
         </g>
+        </template>
+        <template v-else>
+          <g transform="translate(24 28)" fill="none" stroke="white" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 56 V28 Q12 18 22 18 H48 M34 4 L48 18 L34 32" /></g>
+          <text x="104" y="66" font-size="54" font-weight="700" fill="white">500 ft</text>
+          <text x="104" y="100" font-size="30" font-weight="600" fill="#ded6f4">Las Vegas Blvd</text>
+          <text :x="widget.width - 24" y="150" text-anchor="end" font-size="27" font-weight="500" fill="#d6d2e2">2.4 mi | 6 min</text>
+        </template>
         <rect x="24" y="171" :width="widget.width - 48 - 190" height="6" rx="3" fill="#a07edc3c" />
         <rect x="24" y="171" :width="(widget.width - 48 - 190) * .35" height="6" rx="3" fill="#b296ff" />
         <text :x="widget.width - 24" y="182" text-anchor="end" font-size="22" font-weight="600" fill="#ebe1ff">ETA 3:51 PM</text>
@@ -300,6 +346,15 @@ export const LayoutWidgetPreview = {
         </defs>
         <g mask="url(#gx-nav-map-mask)" :transform="'scale(' + widget.width / 600 + ' ' + widget.height / 450 + ')'" fill="none" stroke-linecap="round" stroke-linejoin="round">
           <g :opacity="(widget.opacity ?? 50) / 100">
+          <template v-if="googleMap">
+            <rect width="600" height="450" fill="#e8eaed" />
+            <path d="M440 -20 L640 -20 L640 200 Q540 170 440 -20 Z" fill="#aadaff" />
+            <path d="M-20 120 Q200 150 640 90 M90 -20 L130 480 M430 -20 Q400 200 470 480 M-20 330 L640 360 M260 -20 L250 480" stroke="#ffffff" stroke-width="12" vector-effect="non-scaling-stroke" />
+            <path d="M-20 120 Q200 150 640 90" stroke="#34a853" stroke-width="5" vector-effect="non-scaling-stroke" />
+            <path d="M-20 330 L640 360" stroke="#ea4335" stroke-width="5" vector-effect="non-scaling-stroke" />
+            <path d="M260 -20 L250 480" stroke="#fbbc04" stroke-width="5" vector-effect="non-scaling-stroke" />
+          </template>
+          <template v-else>
           <rect width="600" height="450" fill="#0b0f16" opacity=".45" />
           <g stroke="#000000a8" vector-effect="non-scaling-stroke">
             <path d="M-20 120 Q200 150 640 90 M90 -20 L130 480 M430 -20 Q400 200 470 480 M-20 330 L640 360 M260 -20 L250 480" stroke-width="11" vector-effect="non-scaling-stroke" />
@@ -307,6 +362,7 @@ export const LayoutWidgetPreview = {
           <path d="M-20 120 Q200 150 640 90 M-20 330 L640 360" stroke="#ebf0f5" stroke-width="6" vector-effect="non-scaling-stroke" />
           <path d="M90 -20 L130 480 M430 -20 Q400 200 470 480" stroke="#bec8d2" stroke-width="4" vector-effect="non-scaling-stroke" />
           <path d="M260 -20 L250 480" stroke="#ffc45c" stroke-width="8" vector-effect="non-scaling-stroke" />
+          </template>
           </g>
           <path d="M300 330 Q258 300 254 250 L262 -20" stroke="#8f6bff55" stroke-width="20" vector-effect="non-scaling-stroke" />
           <path d="M300 330 Q258 300 254 250 L262 -20" stroke="#a98bff" stroke-width="9" vector-effect="non-scaling-stroke" />
@@ -318,6 +374,7 @@ export const LayoutWidgetPreview = {
           <rect :x="-roadNameSize * 4.4" y="0" :width="roadNameSize * 8.8" :height="roadNameSize * 1.55" :rx="roadNameSize * .78" fill="#080c14be" />
           <text x="0" :y="roadNameSize * 1.12" text-anchor="middle" :font-size="roadNameSize" fill="#eceef6">Desert Inn Road</text>
         </g>
+        <text v-if="googleMap" x="16" :y="widget.height - 12" :font-size="Math.max(14, Math.min(widget.width, widget.height) * .04)" font-weight="600" fill="#f0f2fa">Google Maps</text>
       </g>
       <template v-else>
         <rect :width="widget.width" :height="widget.height" :fill="palette.cardFill" :stroke="palette.cardBorder" />
@@ -511,7 +568,8 @@ export const OnroadLayoutPage = {
           ...widget, width, height, ...(widget.iconSize ? { display: this.layout[widget.id].display } : {}),
           ...(widget.opacity ? { opacity: this.layout[widget.id].opacity } : {}),
           ...(widget.backgroundToggle ? { background: this.layout[widget.id].background } : {}),
-          ...(widget.collapseToggle ? { collapse: this.layout[widget.id].collapse } : {})
+          ...(widget.collapseToggle ? { collapse: this.layout[widget.id].collapse } : {}),
+          ...(widget.sizes ? { size: this.layout[widget.id].size } : {})
         }
       })
     },
@@ -566,7 +624,7 @@ export const OnroadLayoutPage = {
     stockConfidence() { return this.displayValue("StockConfidenceBallWidget") === "Off" },
   },
   mounted() {
-    if (this.mode === "local") this.feed.start()
+    if (this.mode === "local") { this.feed.start(); loadNavLook() }
     this._stopUnloadGuard = guardUnload(() => this.dirty || this.state.status === "saving")
     // Double-tap zoom stays off across the whole page, app bar included, while a maker page is open.
     if (makerPagesOpen++ === 0) document.documentElement.classList.add("gx-maker-open")
@@ -1138,6 +1196,17 @@ export const OnroadLayoutPage = {
       this.finishColorEdit()
       const before = clone(this.state.draft)
       this.selectedPosition.background = value === 'On'
+      this.recordChange(before)
+      this.state.notice = ""
+    },
+    setWidgetSize(size) {
+      if (!this.editable || this.state.drag || this.state.layerDrag || !this.selectedWidget?.sizes ||
+        !Object.hasOwn(this.selectedWidget.sizes, size)) return
+      this.finishColorEdit()
+      const before = clone(this.state.draft)
+      this.selectedPosition.size = size
+      Object.assign(this.selectedPosition, clampPlacement(this.limitProfile, this.state.selected,
+        this.selectedPosition.x, this.selectedPosition.y, this.layout))
       this.recordChange(before)
       this.state.notice = ""
     },

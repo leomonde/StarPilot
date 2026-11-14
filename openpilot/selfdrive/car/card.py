@@ -1905,10 +1905,17 @@ class Car:
       self.vehicle_startup.maintain(configured=self.startup_panda_configured())
     self.state_publish(CS, RD)
 
+    if (self.ioniq6_startup_keepalive() and not self.ci_initialized and
+        self.startup_diagnostic_admission(cp=self.CP)):
+      self.params.put_bool('ControlsReady', True, block=True)
+      self.ci_initialized = True
+
     initialized = (not any(e.name == EventName.selfdriveInitializing for e in self.sm['onroadEvents']) and
                    self.sm.seen['onroadEvents'])
     if not self.CP.passive and initialized:
       self.controls_update(CS, self.sm['carControl'])
+    elif self.ioniq6_startup_keepalive():
+      self.controls_update(CS, self.sm['carControl'], initialize_only=True)
     elif ((not self.ci_initialized or self.ioniq6_startup_keepalive() or self.gm_startup_keepalive() or self.ev6_startup_keepalive() or
            self.classic_startup_keepalive() or self.torque_ev_startup_keepalive() or self.mixed_startup_keepalive()) and
           self.sm.seen['onroadEvents'] and
