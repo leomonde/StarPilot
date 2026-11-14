@@ -129,55 +129,21 @@ def test_flat_unchanged():
   assert CarController._eucd_slope_brake_offset(SimpleNamespace(orientationNED=[])) == 0.
 
 
-def downhill_after(pitches_deg, start=False):
-  """Feeds one pitch per frame, returns the downhill state after each."""
-  cc = CarController.__new__(CarController)
-  cc.eucd_downhill, cc.eucd_downhill_frames = start, 0
-  CS = SimpleNamespace()
-  out = []
-  for p in pitches_deg:
-    cc._eucd_update_downhill(SimpleNamespace(orientationNED=[0., math.radians(p), 0.]), CS)
-    out.append(CS.eucd_downhill)
-  return out
-
-
-def test_downhill_needs_2s_below_minus_2_deg():
-  n = int(2.0 / DT_CTRL)
-  assert not any(downhill_after([-3.] * (n - 1)))
-  assert downhill_after([-3.] * n)[-1]
-  # a short dip (hard braking) does not count
-  assert not any(downhill_after(([-3.] * (n // 2) + [0.]) * 3))
-  assert not any(downhill_after([-1.5] * (3 * n)))  # between the thresholds
-
-
-def test_downhill_ends_after_1s_above_minus_1_deg():
-  n = int(1.0 / DT_CTRL)
-  assert all(downhill_after([-1.5] * (5 * n), start=True))  # still downhill between the thresholds
-  states = downhill_after([0.] * n, start=True)
-  assert all(states[:-1]) and not states[-1]
-
-
-def test_no_pitch_is_flat():
-  cc = CarController.__new__(CarController)
-  cc.eucd_downhill, cc.eucd_downhill_frames = False, 0
-  CS = SimpleNamespace()
-  for _ in range(500):
-    cc._eucd_update_downhill(SimpleNamespace(orientationNED=[]), CS)
-  assert not CS.eucd_downhill
-
-
 def limited(accel, last):
   cc = CarController.__new__(CarController)
   cc.EUCD_LONG_TX_PERIOD_NANOS = 20_000_000
   return cc._eucd_jerk_limit(accel, last)
 
 
-def test_jerk_limit_ramps():
-  dt = 0.02
-  assert abs(limited(1.3, 0.0) - CCP.EUCD_JERK_UP * dt) < 1e-9             # rising
-  assert abs(limited(-0.4, 1.3) - (1.3 - CCP.EUCD_JERK_DOWN_LIFT * dt)) < 1e-9  # lifting off
-  assert abs(limited(-3.5, -1.0) - (-1.0 - CCP.EUCD_JERK_DOWN_BRAKE * dt)) < 1e-9  # braking deeper
-  assert limited(0.31, 0.3) == 0.31                                        # small steps pass
+def test_jerk_limit_only_cuts_jumps():
+  assert abs(limited(1.3, 0.0) - CCP.EUCD_JERK_UP * 0.02) < 1e-9               # rising moderate
+  assert abs(limited(-3.5, -1.0) - (-1.0 - CCP.EUCD_JERK_DOWN * 0.02)) < 1e-9  # braking only cut on jumps
+  assert limited(-0.4, -0.2) == -0.4                   # the planner's own steps pass
+  # 0 to -3 m/s^2 in 0.25 s, not 0.75 s as before (route 1f: braking started late)
+  a, frames = 0., 0
+  while a > -3.:
+    a, frames = limited(-3., a), frames + 1
+  assert frames * 0.02 <= 0.26
 
 
 def test_jerk_limit_reaches_target():

@@ -99,17 +99,11 @@ class CarControllerEUCDParams:
   EUCD_DOWNHILL_BRAKE_OFFSET_MAX = 0.15  # m/s^2, downhill shift cap
   # Extra uphill margin before BRAKE
   EUCD_UPHILL_BRAKE_ENTER_EXTRA = 0.6  # fraction of the uphill offset
-  # Downhill: the planner targets set + this, so OP holds it with light braking (routes 89f, 8a1)
-  EUCD_DOWNHILL_SET_OFFSET = 5. * CV.KPH_TO_MS
-  EUCD_DOWNHILL_ENTER_PITCH = -2.  # deg, downhill below this for EUCD_DOWNHILL_ENTER_TIME
-  EUCD_DOWNHILL_EXIT_PITCH = -1.  # deg, back to the set above this for EUCD_DOWNHILL_EXIT_TIME
-  EUCD_DOWNHILL_ENTER_TIME = 2.0  # s
-  EUCD_DOWNHILL_EXIT_TIME = 1.0  # s
 
-  # Accel request ramps (jerk limits)
-  EUCD_JERK_UP = 2.0  # m/s^3, rising
-  EUCD_JERK_DOWN_LIFT = 2.5  # m/s^3, falling while positive
-  EUCD_JERK_DOWN_BRAKE = 4.0  # m/s^3, falling at or below 0
+  # Accel request rate limits: the planner already limits jerk. Falling only against jumps (as Toyota's 12 m/s^3);
+  # rising kept moderate, the camera's accel cap can release a wound-up request (route 1f, 678 s: +0.88 -> +1.75)
+  EUCD_JERK_UP = 4.0     # m/s^3
+  EUCD_JERK_DOWN = 12.0  # m/s^3
 
 
 # Delphi ESR 2.5 on the aux bus, read directly

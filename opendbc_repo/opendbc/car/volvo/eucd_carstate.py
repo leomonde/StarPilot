@@ -31,7 +31,6 @@ class CarStateEUCD(CarStateBase):
     # Set by the carcontroller: OP's stop to 0 owns the ACC standstill
     self.eucd_full_stop_active = False
     self.eucd_full_stop_standstill = False
-    self.eucd_downhill = False  # set by the carcontroller
     self.eucd_ecm_standstill_ready = False
     self.eucd_lka_on = False  # the driver's LKA on/off, always on lateral follows it
     self.eucd_gas_pressed = False
@@ -69,8 +68,7 @@ class CarStateEUCD(CarStateBase):
 
     # cruise state
     set_speed = pt_cp.vl["ACC_Speed"]["ACC_Speed"] * CV.KPH_TO_MS
-    # Downhill (from the carcontroller): the planner targets a bit over the set, so OP holds it without fighting it
-    ret.cruiseState.speed = set_speed + (CarControllerEUCDParams.EUCD_DOWNHILL_SET_OFFSET if self.eucd_downhill else 0.)
+    ret.cruiseState.speed = set_speed
     ret.cruiseState.speedCluster = ret.cruiseState.speed
     ret.cruiseState.available = bool(cam_cp.vl["FSM0"]["ACC_Available"])
     # ECM is the ACC master
@@ -122,7 +120,7 @@ class CarStateEUCD(CarStateBase):
     ret.rightBlinker = pt_cp.vl["MiscCarInfo"]["TurnSignal"] == 3
 
     # One accelCruise/decelCruise per frame from the pending delta
-    cruise_kph_now = round(set_speed * CV.MS_TO_KPH)  # the driver's set, not the downhill offset
+    cruise_kph_now = round(set_speed * CV.MS_TO_KPH)
     # Stopped, Set+/- only sets the speed: no accel/decel press, or the planner reads it as "go" (route 8b2, 572 s/591 s)
     if ret.standstill:
       self._eucd_pending_delta = 0

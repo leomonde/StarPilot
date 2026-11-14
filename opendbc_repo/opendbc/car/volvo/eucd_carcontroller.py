@@ -36,8 +36,6 @@ class CarControllerEUCD(CarControllerBase):
     self.eucd_sng_ack_frames = 0
     self.eucd_resume_hold_frames = 0  # Resume held to the ECM, frames left
     self.eucd_last_ccbuttons = None  # CEM's last CCButtons, copied for the Resume
-    self.eucd_downhill = False
-    self.eucd_downhill_frames = 0  # frames the pitch has been past the enter/exit threshold
     self.eucd_next_long_tx_nanos = 0
     self.EUCD_LONG_TX_PERIOD_NANOS = 20_000_000
     self.eucd_long_mode = LongMode.COAST
@@ -63,7 +61,6 @@ class CarControllerEUCD(CarControllerBase):
       can_sends += self._eucd_lateral(CC, CS)
 
     self.eucd_full_stop.update(CC, CS)
-    self._eucd_update_downhill(CC, CS)
     # Carstate takes the ACC standstill from OP during the stop
     CS.eucd_full_stop_active = self.eucd_full_stop.active
     CS.eucd_full_stop_standstill = self.eucd_full_stop.standstill
@@ -169,18 +166,6 @@ class CarControllerEUCD(CarControllerBase):
       can_sends.append(create_eucd_resume_button(self.packer, self.eucd_last_ccbuttons))
     self.eucd_resume_hold_frames = max(self.eucd_resume_hold_frames - 1, 0)
 
-  def _eucd_update_downhill(self, CC, CS):
-    """Downhill from the calibrated pitch, with hysteresis: carstate reports the set speed + offset then."""
-    CCP = CarControllerEUCDParams
-    pitch = math.degrees(CC.orientationNED[1]) if len(CC.orientationNED) == 3 else 0.
-    past = pitch > CCP.EUCD_DOWNHILL_EXIT_PITCH if self.eucd_downhill else pitch < CCP.EUCD_DOWNHILL_ENTER_PITCH
-    self.eucd_downhill_frames = self.eucd_downhill_frames + 1 if past else 0
-    hold_time = CCP.EUCD_DOWNHILL_EXIT_TIME if self.eucd_downhill else CCP.EUCD_DOWNHILL_ENTER_TIME
-    if self.eucd_downhill_frames * DT_CTRL >= hold_time:
-      self.eucd_downhill = not self.eucd_downhill
-      self.eucd_downhill_frames = 0
-    CS.eucd_downhill = self.eucd_downhill
-
   def _eucd_relay_fsm0(self, CS, can_sends, ecm_engaged):
     """FSM0 relayed, never ACC enabled without the ECM engaged."""
     for stock_fsm0 in CS.eucd_stock_FSM0_frames:
@@ -271,11 +256,10 @@ class CarControllerEUCD(CarControllerBase):
     return accel, self.eucd_long_mode
 
   def _eucd_jerk_limit(self, accel, last_accel):
-    """Ramp OP's accel request (jerk limits)."""
+    """Rate limit OP's accel request: braking only against jumps, rising moderate."""
     CCP = CarControllerEUCDParams
     dt = self.EUCD_LONG_TX_PERIOD_NANOS * 1e-9
-    down = CCP.EUCD_JERK_DOWN_LIFT if last_accel > 0. else CCP.EUCD_JERK_DOWN_BRAKE
-    return min(max(accel, last_accel - down * dt), last_accel + CCP.EUCD_JERK_UP * dt)
+    return min(max(accel, last_accel - CCP.EUCD_JERK_DOWN * dt), last_accel + CCP.EUCD_JERK_UP * dt)
 
   # ---- Camera rules ----
 
