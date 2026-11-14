@@ -289,10 +289,11 @@ class CarControllerEUCD(CarControllerBase):
     return min(accel, max(cam_accel, CCP.EUCD_CAMERA_ACCEL_CAP_FLOOR))
 
   def _eucd_camera_brake(self, accel, cam_accel, leftover=False):
-    """Follow the camera's hard brake, latched until it releases or only its leftover brake state is left."""
+    """Follow the camera's brake when hard or well past OP's, latched until it releases or only its leftover brake state is left."""
+    CCP = CarControllerEUCDParams
     if not self.eucd_cam_brake or leftover:
       self.eucd_cam_brake_honor = False
-    elif cam_accel < CarControllerEUCDParams.EUCD_CAMERA_BRAKE_HONOR_BELOW:
+    elif cam_accel < CCP.EUCD_CAMERA_BRAKE_HONOR_BELOW or accel - cam_accel > CCP.EUCD_CAMERA_BRAKE_HONOR_DELTA:
       self.eucd_cam_brake_honor = True
     return min(accel, cam_accel) if self.eucd_cam_brake_honor else accel
 

@@ -31,6 +31,23 @@ def test_hard_camera_brake_followed_at_once_and_latched():
 def test_mild_camera_brake_ignored():
   cc = controller(cam_brake=True)
   assert cc._eucd_camera_brake(0.1, -1.0) == 0.1
+  assert cc._eucd_camera_brake(-0.75, -2.2) == -0.75  # 1.45 harder: still OP's
+  assert not cc.eucd_cam_brake_honor
+
+
+def test_camera_brake_well_past_ops_is_followed_and_latched():
+  # Route 1f: cut-in, camera -2.56 vs OP +0.09 (665.4 s); camera -2.00 vs OP -0.48 before its abort 0x10 (721.7 s)
+  for op, cam in ((0.09, -2.56), (-0.48, -2.00)):
+    cc = controller(cam_brake=True)
+    assert cc._eucd_camera_brake(op, cam) == cam
+    assert cc._eucd_camera_brake(op, -0.5) == -0.5  # latched while the camera brakes, also when it eases
+    cc.eucd_cam_brake = False
+    assert cc._eucd_camera_brake(op, -0.5) == op
+
+
+def test_camera_delta_needs_its_brake_request():
+  cc = controller(cam_brake=False)
+  assert cc._eucd_camera_brake(0.5, -1.5) == 0.5
   assert not cc.eucd_cam_brake_honor
 
 
