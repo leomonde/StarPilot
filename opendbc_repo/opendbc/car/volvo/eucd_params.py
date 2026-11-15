@@ -87,9 +87,11 @@ class CarControllerEUCDParams:
 
   # FSM3 mirrors camera mode 0; camera hydraulic brake followed below this
   EUCD_CAMERA_BRAKE_HONOR_BELOW = -3.5  # m/s^2
-  # ... or when it brakes this much harder than OP: it saw what OP did not (route 1f: a cut-in at 6 m, and its
-  # abort 0x10 after ~2 s of braking 1.5-1.65 harder than OP at 130 km/h)
+  # ... or when it brakes this much harder than OP for this long: it saw what OP did not. Route 1f: a cut-in at 6 m,
+  # and its abort 0x10 after ~3.4 s of braking 1.5-1.65 harder than OP with OP's own hydraulic brake at 130 km/h.
+  # The hold leaves the short disagreements to OP (leads braking, routes 10 and 1a); the abort is still ~1 s ahead.
   EUCD_CAMERA_BRAKE_HONOR_DELTA = 1.5  # m/s^2
+  EUCD_CAMERA_BRAKE_HONOR_DELTA_TIME = 2.0  # s
   # With a close camera target, OP accel capped at the camera's, not below the floor
   EUCD_CAMERA_ACCEL_CAP_FLOOR = 0.0  # m/s^2
   EUCD_CAMERA_ACCEL_CAP_GAP = 1.5  # s, camera target closer than this

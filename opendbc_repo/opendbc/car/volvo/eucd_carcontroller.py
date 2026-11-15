@@ -42,6 +42,7 @@ class CarControllerEUCD(CarControllerBase):
     self.eucd_accel = 0.0
     self.eucd_cam_brake = False
     self.eucd_cam_brake_honor = False
+    self.eucd_cam_delta_frames = 0  # long frames the camera has braked past OP's by the honor delta
     self.eucd_cam_hard_brake = False  # the camera brakes harder than OP's limit: its FSM3/FSM4 go out unchanged
     self.eucd_spoof_cam_ack = False
     self.eucd_cam_brake_target = 0
@@ -193,12 +194,14 @@ class CarControllerEUCD(CarControllerBase):
       accel, long_mode = 0., LongMode.COAST
       self.eucd_long_mode = LongMode.COAST
       self.eucd_cam_brake_honor = False
+      self.eucd_cam_delta_frames = 0
     elif CC.longActive:
       accel, long_mode = self._eucd_long_decision(CC, CS)
     else:
       accel = float(CS.eucd_stock_FSM3["ACC_AccelerationRequest"])
       self.eucd_long_mode = LongMode.COAST
       self.eucd_cam_brake_honor = False
+      self.eucd_cam_delta_frames = 0
       long_mode = None
     if self.eucd_full_stop.holding:
       # The car holds the stop: the camera's standstill request (route 807)
@@ -273,11 +276,14 @@ class CarControllerEUCD(CarControllerBase):
     return min(accel, max(cam_accel, CCP.EUCD_CAMERA_ACCEL_CAP_FLOOR))
 
   def _eucd_camera_brake(self, accel, cam_accel, leftover=False):
-    """Follow the camera's brake when hard or well past OP's, latched until it releases or only its leftover brake state is left."""
+    """Follow the camera's brake when hard, or well past OP's for a while; latched until it releases or only its leftover brake state is left."""
     CCP = CarControllerEUCDParams
+    past_op = self.eucd_cam_brake and not leftover and accel - cam_accel > CCP.EUCD_CAMERA_BRAKE_HONOR_DELTA
+    self.eucd_cam_delta_frames = self.eucd_cam_delta_frames + 1 if past_op else 0
+    held = self.eucd_cam_delta_frames * self.EUCD_LONG_TX_PERIOD_NANOS * 1e-9 >= CCP.EUCD_CAMERA_BRAKE_HONOR_DELTA_TIME
     if not self.eucd_cam_brake or leftover:
       self.eucd_cam_brake_honor = False
-    elif cam_accel < CCP.EUCD_CAMERA_BRAKE_HONOR_BELOW or accel - cam_accel > CCP.EUCD_CAMERA_BRAKE_HONOR_DELTA:
+    elif cam_accel < CCP.EUCD_CAMERA_BRAKE_HONOR_BELOW or held:
       self.eucd_cam_brake_honor = True
     return min(accel, cam_accel) if self.eucd_cam_brake_honor else accel
 

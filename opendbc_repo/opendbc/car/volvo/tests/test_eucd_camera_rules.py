@@ -17,7 +17,12 @@ def controller(cam_brake=False):
   cc = CarController.__new__(CarController)
   cc.eucd_cam_brake = cam_brake
   cc.eucd_cam_brake_honor = False
+  cc.eucd_cam_delta_frames = 0
+  cc.EUCD_LONG_TX_PERIOD_NANOS = 20_000_000
   return cc
+
+
+HOLD_FRAMES = round(CCP.EUCD_CAMERA_BRAKE_HONOR_DELTA_TIME / 0.02)
 
 
 def test_hard_camera_brake_followed_at_once_and_latched():
@@ -35,19 +40,37 @@ def test_mild_camera_brake_ignored():
   assert not cc.eucd_cam_brake_honor
 
 
-def test_camera_brake_well_past_ops_is_followed_and_latched():
+def test_camera_brake_well_past_ops_for_2s_is_followed_and_latched():
   # Route 1f: cut-in, camera -2.56 vs OP +0.09 (665.4 s); camera -2.00 vs OP -0.48 before its abort 0x10 (721.7 s)
   for op, cam in ((0.09, -2.56), (-0.48, -2.00)):
     cc = controller(cam_brake=True)
+    for _ in range(HOLD_FRAMES - 1):
+      assert cc._eucd_camera_brake(op, cam) == op  # OP's own until the delta has lasted 2 s
     assert cc._eucd_camera_brake(op, cam) == cam
     assert cc._eucd_camera_brake(op, -0.5) == -0.5  # latched while the camera brakes, also when it eases
     cc.eucd_cam_brake = False
     assert cc._eucd_camera_brake(op, -0.5) == op
 
 
+def test_short_camera_delta_is_left_to_op():
+  # Leads braking in routes 10 and 1a: under 2 s past OP, OP handled them
+  cc = controller(cam_brake=True)
+  for _ in range(3):
+    for _ in range(HOLD_FRAMES - 1):
+      assert cc._eucd_camera_brake(0.0, -2.0) == 0.0
+    assert cc._eucd_camera_brake(0.0, -1.0) == 0.0  # back within the delta: the hold starts over
+  assert not cc.eucd_cam_brake_honor
+
+
+def test_hard_camera_brake_needs_no_hold():
+  cc = controller(cam_brake=True)
+  assert cc._eucd_camera_brake(0.0, HARD) == HARD
+
+
 def test_camera_delta_needs_its_brake_request():
   cc = controller(cam_brake=False)
-  assert cc._eucd_camera_brake(0.5, -1.5) == 0.5
+  for _ in range(HOLD_FRAMES + 1):
+    assert cc._eucd_camera_brake(0.5, -1.5) == 0.5
   assert not cc.eucd_cam_brake_honor
 
 
