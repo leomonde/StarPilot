@@ -100,6 +100,24 @@ def test_mode_hysteresis():
   assert m == LongMode.DRIVE
 
 
+
+def test_brake_enters_earlier_when_slower():
+  # Route 22: below 20 km/h the camera brakes from -0.1; coasting there let D creep the car toward the lead
+  kph = 1 / 3.6
+  assert volvocan.eucd_next_long_mode(LongMode.COAST, -0.15, v_ego=8 * kph) == LongMode.BRAKE
+  assert volvocan.eucd_next_long_mode(LongMode.COAST, -0.15, v_ego=30 * kph) == LongMode.COAST
+  assert volvocan.eucd_next_long_mode(LongMode.COAST, -0.35, v_ego=30 * kph) == LongMode.BRAKE
+  # highway unchanged
+  assert volvocan.eucd_next_long_mode(LongMode.COAST, -0.45, v_ego=100 * kph) == LongMode.COAST
+  assert volvocan.eucd_next_long_mode(LongMode.COAST, -0.55, v_ego=100 * kph) == LongMode.BRAKE
+  # slow: stays braking until OP asks for traction, never left with a decel request
+  assert volvocan.eucd_next_long_mode(LongMode.BRAKE, -0.01, v_ego=8 * kph) == LongMode.BRAKE
+  assert volvocan.eucd_next_long_mode(LongMode.BRAKE, 0.1, v_ego=8 * kph) == LongMode.DRIVE
+  for v in (0., 10., 25., 40., 120.):
+    enter, exit_ = volvocan.eucd_brake_thresholds(v * kph)
+    assert enter < exit_ <= 0.
+
+
 FSM4 = 0x31A
 FSM1 = 0x260
 # stock camera frames, route 00000808 (ACC engaged)

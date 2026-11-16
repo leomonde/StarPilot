@@ -67,13 +67,15 @@ def intent(lkas_action):
   return aol.VolvoEucdCardIntent(replace(read_settings(FakeParams()), lkas_action=lkas_action))
 
 
-def step(card, *, available=False, lka=False, enabled=False, press=False):
+def step(card, *, available=False, lka=False, enabled=False, press=False, cancel=False):
   card.observe_vehicle_state(SimpleNamespace(eucd_lka_on=lka))
   state = structs.CarState(canValid=True, gearShifter=structs.CarState.GearShifter.drive)
   state.cruiseState.available = available
   state.cruiseState.enabled = enabled
   if press:
     state.buttonEvents = [structs.CarState.ButtonEvent(type=ButtonType.lkas, pressed=True)]
+  if cancel:
+    state.buttonEvents = [structs.CarState.ButtonEvent(type=ButtonType.cancel, pressed=True)]
   card.update(state.as_reader(), fault_active=False, native_rejection_ns=0, now_ns=1, standard_enabled=False)
   return card.allowed_latch
 
@@ -126,6 +128,17 @@ def test_lka_off_engage_steers_with_the_latch_until_the_lka_pauses():
   assert step(card, available=True, enabled=True, lka=True)
   assert not step(card, available=True, enabled=True, lka=False, press=True)  # LKA off pauses
   assert card.pause_lateral
+
+
+def test_onoff_cancel_keeps_aol_with_the_lka_on():
+  # The driver's On/Off is reported as cancel: it ends the ACC engagement, the LKA still owns AOL
+  card = intent(AOL_TOGGLE)
+  assert step(card, available=True, enabled=True, lka=True)
+  assert step(card, available=True, enabled=True, lka=True, cancel=True)
+  assert step(card, available=True, enabled=False, lka=True)
+  card = intent(AOL_TOGGLE)
+  assert step(card, available=True, enabled=True, lka=False)
+  assert not step(card, available=True, enabled=False, lka=False, cancel=True)  # LKA off: no AOL once disengaged
 
 
 def test_lkas_unmapped_follows_the_acc_main():

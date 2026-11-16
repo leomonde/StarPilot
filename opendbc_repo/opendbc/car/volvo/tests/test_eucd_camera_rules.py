@@ -147,6 +147,14 @@ def test_downhill_brakes_earlier():
   assert eucd_next_long_mode(LongMode.BRAKE, 0.01, offset(-10.)) == LongMode.COAST
 
 
+def test_slope_offset_fades_out_slow():
+  cc = SimpleNamespace(orientationNED=[0., math.radians(3.), 0.])  # route 22, 878 s
+  lo, hi = CCP.EUCD_BRAKE_ENTER_BP
+  assert CarController._eucd_slope_brake_offset(cc, lo) == 0.
+  assert CarController._eucd_slope_brake_offset(cc, hi) == CarController._eucd_slope_brake_offset(cc)
+  assert CarController._eucd_slope_brake_offset(cc, (lo + hi) / 2) == pytest.approx(CarController._eucd_slope_brake_offset(cc) / 2)
+
+
 def test_flat_unchanged():
   assert offset(0.) == 0.
   assert CarController._eucd_slope_brake_offset(SimpleNamespace(orientationNED=[])) == 0.
@@ -174,28 +182,6 @@ def test_jerk_limit_reaches_target():
   for _ in range(100):
     a = limited(-0.4, a)
   assert a == -0.4
-
-
-def cam_target(dist, v=24.):
-  return SimpleNamespace(eucd_acc_distance=dist, out=SimpleNamespace(vEgo=v))
-
-
-def test_accel_capped_by_camera_with_target():
-  # Motorcycle case: OP wants +2, camera holds back
-  assert CarController._eucd_camera_accel_cap(cam_target(22), 2.0, -0.5) == CCP.EUCD_CAMERA_ACCEL_CAP_FLOOR
-  assert CarController._eucd_camera_accel_cap(cam_target(22), 2.0, 0.6) == 0.6
-
-
-def test_accel_cap_never_adds_braking():
-  assert CarController._eucd_camera_accel_cap(cam_target(22), -1.5, -0.5) == -1.5
-  assert CarController._eucd_camera_accel_cap(cam_target(22), -0.2, -2.0) == -0.2
-
-
-def test_accel_cap_off_without_close_target():
-  assert CarController._eucd_camera_accel_cap(cam_target(255), 2.0, -0.5) == 2.0
-  # Same far lead for OP and camera: OP keeps its accel
-  assert CarController._eucd_camera_accel_cap(cam_target(70), 2.0, 1.0) == 2.0
-  assert CarController._eucd_camera_accel_cap(cam_target(9, v=0.), 1.0, 0.2) == 0.2
 
 
 def test_fsm3_template_never_keeps_the_camera_ack():

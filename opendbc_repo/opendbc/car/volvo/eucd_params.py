@@ -64,8 +64,14 @@ class CarControllerEUCDParams:
   EUCD_ACCEL_MAX = 2.0   # m/s^2
 
   # FSM3 mode hysteresis on OP accel
-  EUCD_BRAKE_ENTER = -0.50  # m/s^2
+  EUCD_BRAKE_ENTER = -0.50  # m/s^2, at and above EUCD_BRAKE_ENTER_BP[-1]
   EUCD_BRAKE_EXIT = -0.15
+  # Slower, BRAKE enters earlier, as the camera's own (route 22: it brakes from -0.1 below 20 km/h, from ~-0.2 at
+  # 20-40). Coasting there does not slow the car, D creeps on: OP coasting at -0.1..-0.6 sped the car up 34-69 % of
+  # the time and its stops ended at 1.6-5 m instead of the planner's 6 m (routes 0a, 22, 24).
+  EUCD_BRAKE_ENTER_BP = [15. * CV.KPH_TO_MS, 40. * CV.KPH_TO_MS]
+  EUCD_BRAKE_ENTER_V = [-0.10, EUCD_BRAKE_ENTER]
+  EUCD_BRAKE_HYSTERESIS = EUCD_BRAKE_EXIT - EUCD_BRAKE_ENTER  # exit this much above the enter, never above 0
   EUCD_DRIVE_ENTER = 0.08
   EUCD_DRIVE_EXIT = 0.04
 
@@ -92,10 +98,6 @@ class CarControllerEUCDParams:
   # The hold leaves the short disagreements to OP (leads braking, routes 10 and 1a); the abort is still ~1 s ahead.
   EUCD_CAMERA_BRAKE_HONOR_DELTA = 1.5  # m/s^2
   EUCD_CAMERA_BRAKE_HONOR_DELTA_TIME = 2.0  # s
-  # With a close camera target, OP accel capped at the camera's, not below the floor
-  EUCD_CAMERA_ACCEL_CAP_FLOOR = 0.0  # m/s^2
-  EUCD_CAMERA_ACCEL_CAP_GAP = 1.5  # s, camera target closer than this
-  EUCD_CAMERA_ACCEL_CAP_MIN_DIST = 10.  # m, at low speed
   # BRAKE thresholds shifted by the slope's coast accel
   EUCD_COAST_PITCH_GAIN = 5.65  # m/s^2 per sin(pitch)
   EUCD_DOWNHILL_BRAKE_OFFSET_MAX = 0.15  # m/s^2, downhill shift cap

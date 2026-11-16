@@ -112,6 +112,20 @@ def test_gas_press_and_release_have_the_panda_hysteresis():
     assert cs.update(parsers).gasPressed == pressed, pedal
 
 
+def test_driver_onoff_is_a_cancel_button():
+  # Route 22, 418.4 s: the driver's On/Off reached the panda's permission before OP saw the ECM disengage
+  cs, parsers, _ = car_state()
+  t = 1_000_000_000
+  events = []
+  for pressed in (False, True, True, False):
+    t += 20_000_000
+    buttons = {"ACCOnOffBtn": 1, "ACCOnOffBtnInv": 0} if pressed else {"ACCOnOffBtnInv": 1}
+    for parser in parsers.values():
+      parser.update([(t, required_frames(CCButtons=buttons))])
+    events.append([(e.type, e.pressed) for e in cs.update(parsers).buttonEvents if e.type == ButtonType.cancel])
+  assert events == [[], [(ButtonType.cancel, True)], [], [(ButtonType.cancel, False)]]
+
+
 def control(lat_active, angle=0., cancel=False):
   cc = structs.CarControl()
   cc.latActive = lat_active

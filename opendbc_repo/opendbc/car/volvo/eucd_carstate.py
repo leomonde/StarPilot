@@ -27,6 +27,7 @@ class CarStateEUCD(CarStateBase):
     self._eucd_pending_delta = 0
     self._eucd_custom_acc_step = 1
     self.eucd_gap_button_states = {"TimeGapIncreaseBtn": False, "TimeGapDecreaseBtn": False}
+    self.eucd_driver_onoff = False  # driver's ACC On/Off held (bit set, inverted copy cleared)
     self.eucd_driver_resume = False  # driver's Resume held (bit set, inverted copy cleared)
     # Set by the carcontroller: OP's stop to 0 owns the ACC standstill
     self.eucd_full_stop_active = False
@@ -143,6 +144,11 @@ class CarStateEUCD(CarStateBase):
       pressed = bool(pt_cp.vl["CCButtons"][signal]) and not pt_cp.vl["CCButtons"][signal + "Inv"]
       button_events.extend(create_button_events(pressed, self.eucd_gap_button_states[signal], {True: ButtonType.gapAdjustCruise}))
       self.eucd_gap_button_states[signal] = pressed
+    # On/Off is the driver's cancel: reported as such, the press reaches controls before the ECM disengages
+    # (~30 ms), so OP disengages on the driver's cancel and not on the panda's lost permission (route 22, 418.4 s)
+    driver_onoff = bool(pt_cp.vl["CCButtons"]["ACCOnOffBtn"]) and not pt_cp.vl["CCButtons"]["ACCOnOffBtnInv"]
+    button_events.extend(create_button_events(driver_onoff, self.eucd_driver_onoff, {True: ButtonType.cancel}))
+    self.eucd_driver_onoff = driver_onoff
     driver_resume = bool(pt_cp.vl["CCButtons"]["ACCResumeBtn"]) and not pt_cp.vl["CCButtons"]["ACCResumeBtnInv"]
     button_events.extend(create_button_events(driver_resume, self.eucd_driver_resume, {True: ButtonType.resumeCruise}))
     self.eucd_driver_resume = driver_resume

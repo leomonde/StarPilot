@@ -59,17 +59,27 @@ def create_eucd_lka_msg(packer, apply_steer: float, steer_direction: int):
   return packer.make_can_msg("FSM2", 0, values)
 
 
-def eucd_next_long_mode(mode: LongMode, accel: float, brake_offset: float = 0.) -> LongMode:
+def eucd_brake_thresholds(v_ego: float | None) -> tuple[float, float]:
+  """BRAKE enter and exit accel at this speed; None is the highway's."""
+  CCP = CarControllerEUCDParams
+  if v_ego is None:
+    return CCP.EUCD_BRAKE_ENTER, CCP.EUCD_BRAKE_EXIT
+  enter = float(np.interp(v_ego, CCP.EUCD_BRAKE_ENTER_BP, CCP.EUCD_BRAKE_ENTER_V))
+  return enter, min(enter + CCP.EUCD_BRAKE_HYSTERESIS, 0.)
+
+
+def eucd_next_long_mode(mode: LongMode, accel: float, brake_offset: float = 0., v_ego: float | None = None) -> LongMode:
   # brake_offset shifts the BRAKE thresholds by the slope
   CCP = CarControllerEUCDParams
+  brake_enter, brake_exit = eucd_brake_thresholds(v_ego)
   if mode == LongMode.BRAKE:
-    if accel <= CCP.EUCD_BRAKE_EXIT + brake_offset:
+    if accel <= brake_exit + brake_offset:
       return LongMode.BRAKE
   elif mode == LongMode.DRIVE:
     if accel >= CCP.EUCD_DRIVE_EXIT:
       return LongMode.DRIVE
   enter_offset = brake_offset * (1. + CCP.EUCD_UPHILL_BRAKE_ENTER_EXTRA) if brake_offset < 0. else brake_offset
-  if accel < CCP.EUCD_BRAKE_ENTER + enter_offset:
+  if accel < brake_enter + enter_offset:
     return LongMode.BRAKE
   if accel > CCP.EUCD_DRIVE_ENTER:
     return LongMode.DRIVE

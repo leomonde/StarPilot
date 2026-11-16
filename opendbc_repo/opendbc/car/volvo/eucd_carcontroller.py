@@ -1,3 +1,21 @@
+"""Volvo V60 (EUCD) car controller: OP replaces the camera's (FSM) ACC requests on their way to the ECM.
+
+The camera keeps running its own ACC under OP and checks that the car follows it. OP owns acceleration and
+braking; the camera's request is used only in these cases (parameters in eucd_params.py):
+
+1. Hard brake: the camera asks for less than EUCD_CAMERA_BRAKE_HONOR_BELOW (-3.5 m/s^2, the panda's limit).
+   Followed at once; below OP's limit its own FSM3/FSM4 go out unchanged (its emergency brake).
+2. Lasting harder brake: the camera's brake request is on and it asks for more than EUCD_CAMERA_BRAKE_HONOR_DELTA
+   (1.5 m/s^2) harder than OP for EUCD_CAMERA_BRAKE_HONOR_DELTA_TIME (2 s). It saw what OP did not (a cut-in) or
+   would abort with 0x10 after ~3.4 s of OP braking less than it (route 1f). Short disagreements stay OP's.
+   Cases 1 and 2 are latched until the camera releases its brake request (_eucd_camera_brake).
+3. FSM3 mode: while the camera is in its brake mode, FSM3 carries it (_eucd_fsm3_mode).
+
+OP's acceleration is never limited by the camera's: a cap on it with the camera's target closer than 1.5 s cut OP
+14 % of the time in traffic (route 22, 0.45 m/s^2 on average), falling behind and then surging as the request wound up.
+
+Never the camera's: OP's own stop to 0 and hold (eucd_full_stop.py), and the driver's gas (coast, no request).
+"""
 import math
 
 from opendbc.can.packer import CANPacker
@@ -248,14 +266,13 @@ class CarControllerEUCD(CarControllerBase):
     accel = min(max(actuators.accel, CCP.EUCD_ACCEL_MIN), CCP.EUCD_ACCEL_MAX)
     accel = self._eucd_jerk_limit(accel, self.eucd_accel)
     cam_accel = float(CS.eucd_stock_FSM3["ACC_AccelerationRequest"])
-    accel = self._eucd_camera_accel_cap(CS, accel, cam_accel)
     accel = self._eucd_camera_brake(accel, cam_accel, eucd_cam_brake_leftover(CS))
-    brake_offset = self._eucd_slope_brake_offset(CC)
+    brake_offset = self._eucd_slope_brake_offset(CC, CS.out.vEgo)
 
     if self.eucd_cam_brake_honor:
       self.eucd_long_mode = LongMode.BRAKE
     else:
-      self.eucd_long_mode = eucd_next_long_mode(self.eucd_long_mode, accel, brake_offset)
+      self.eucd_long_mode = eucd_next_long_mode(self.eucd_long_mode, accel, brake_offset, CS.out.vEgo)
     return accel, self.eucd_long_mode
 
   def _eucd_jerk_limit(self, accel, last_accel):
@@ -265,15 +282,6 @@ class CarControllerEUCD(CarControllerBase):
     return min(max(accel, last_accel - CCP.EUCD_JERK_DOWN * dt), last_accel + CCP.EUCD_JERK_UP * dt)
 
   # ---- Camera rules ----
-
-  @staticmethod
-  def _eucd_camera_accel_cap(CS, accel, cam_accel):
-    """No more accel than the camera's while its target is close."""
-    CCP = CarControllerEUCDParams
-    close = max(CS.out.vEgo * CCP.EUCD_CAMERA_ACCEL_CAP_GAP, CCP.EUCD_CAMERA_ACCEL_CAP_MIN_DIST)
-    if CS.eucd_acc_distance >= min(close, 255):
-      return accel
-    return min(accel, max(cam_accel, CCP.EUCD_CAMERA_ACCEL_CAP_FLOOR))
 
   def _eucd_camera_brake(self, accel, cam_accel, leftover=False):
     """Follow the camera's brake when hard, or well past OP's for a while; latched until it releases or only its leftover brake state is left."""
@@ -297,12 +305,17 @@ class CarControllerEUCD(CarControllerBase):
     return long_mode
 
   @staticmethod
-  def _eucd_slope_brake_offset(CC):
-    """Slope part of the coast accel from pitch."""
+  def _eucd_slope_brake_offset(CC, v_ego=None):
+    """Slope part of the coast accel from pitch, faded out slow: there coasting does not slow the car even uphill
+    (route 22, 878 s: +3 deg, OP coasting at -0.3..-0.5, the car held its speed)."""
     if len(CC.orientationNED) != 3:
       return 0.
     CCP = CarControllerEUCDParams
-    return min(-CCP.EUCD_COAST_PITCH_GAIN * math.sin(CC.orientationNED[1]), CCP.EUCD_DOWNHILL_BRAKE_OFFSET_MAX)
+    offset = min(-CCP.EUCD_COAST_PITCH_GAIN * math.sin(CC.orientationNED[1]), CCP.EUCD_DOWNHILL_BRAKE_OFFSET_MAX)
+    if v_ego is None:
+      return offset
+    lo, hi = CCP.EUCD_BRAKE_ENTER_BP
+    return offset * min(max((v_ego - lo) / (hi - lo), 0.), 1.)
 
   def _eucd_relay_brake_acks(self, CC, CS):
     """Brake acks to the camera: masked or spoofed."""
