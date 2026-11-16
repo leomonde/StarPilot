@@ -18,11 +18,10 @@ def controller(cam_brake=False):
   cc.eucd_cam_brake = cam_brake
   cc.eucd_cam_brake_honor = False
   cc.eucd_cam_delta_frames = 0
-  cc.EUCD_LONG_TX_PERIOD_NANOS = 20_000_000
   return cc
 
 
-HOLD_FRAMES = round(CCP.EUCD_CAMERA_BRAKE_HONOR_DELTA_TIME / 0.02)
+HOLD_FRAMES = round(CCP.EUCD_CAMERA_BRAKE_HONOR_DELTA_TIME / CCP.EUCD_LONG_TX_PERIOD)
 
 
 def test_hard_camera_brake_followed_at_once_and_latched():
@@ -162,7 +161,6 @@ def test_flat_unchanged():
 
 def limited(accel, last):
   cc = CarController.__new__(CarController)
-  cc.EUCD_LONG_TX_PERIOD_NANOS = 20_000_000
   return cc._eucd_jerk_limit(accel, last)
 
 

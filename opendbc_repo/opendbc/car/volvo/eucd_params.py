@@ -39,10 +39,12 @@ class CarControllerEUCDParams:
   EUCD_RESUME_HOLD_FRAMES = int(0.3 / DT_CTRL)
   # s of planner resume before SNG: 0.2 let a red-light flicker through, the ECM drove off on its own (route 8a4)
   EUCD_SNG_OP_RESUME_TIME = 0.5
+  EUCD_RESUME_BURST_INTERVAL = 1.0  # s between resume bursts at a standstill
+  EUCD_RESUME_BURST_MAX = 5  # bursts per standstill
+  EUCD_SNG_ACK_TIME = 0.5  # s of FSM3 ACC_Check with the first burst, as the camera's ack (~300 ms after engaging)
   EUCD_MIN_STEER_SPEED = 0.1  # m/s, no steering nor cancel button below this
 
   # OP's stop to 0 (route 807): below the enter speed, braking, OP owns the ECM and the camera is shown ACC standby
-  EUCD_FULL_STOP = True
   EUCD_FULL_STOP_ENTER_SPEED = 25. * CV.KPH_TO_MS  # OP takes the ECM below this while braking; 30 handed back and forth with the resync at 32 (route 89b)
   EUCD_STOPPING_FLAG_SPEED = 2.6 * CV.KPH_TO_MS  # FSM4 b1 F1 -> F9 below this
   EUCD_HOLD_RELEASE_FRAMES = int(0.05 / DT_CTRL)  # brake request released after the car's hold
@@ -54,12 +56,14 @@ class CarControllerEUCDParams:
   EUCD_CAM_RESYNC_SPEED = 32. * CV.KPH_TO_MS  # re-engage above this (its ACC minimum is 30)
   EUCD_CAM_SET_FRAMES = int(0.16 / DT_CTRL)  # Set press to the camera, as long as the driver's (route 885)
   EUCD_CAM_SPOOF_RELEASE_FRAMES = int(0.03 / DT_CTRL)  # EngineData engaged again this long after the Set
+  EUCD_CAM_RESYNC_STANDBY = 1.0  # s of standby before the Set is tried again
   EUCD_CAM_RESYNC_RETRY = 2.0  # s without the camera back -> standby again for 1 s, Set again
   EUCD_CAM_RESYNC_ATTEMPTS = 3  # then the camera's frames back to the ECM (ACC drops)
   EUCD_FULL_STOP_EXIT_STANDBY_MAX = 1.0  # s, stop ended with the ECM still engaged: camera kept in standby at most this long
   EUCD_CAM_CLEAN_FRAMES = int(0.3 / DT_CTRL)  # camera engaged and clean this long -> its frames back to the ECM
 
-  # Longitudinal limits
+  # Longitudinal: FSM1/FSM3 sent at 50 Hz, limits
+  EUCD_LONG_TX_PERIOD = 0.02  # s
   EUCD_ACCEL_MIN = -3.5  # m/s^2, as the panda's (the camera's harder brake goes out as its own frame)
   EUCD_ACCEL_MAX = 2.0   # m/s^2
 
@@ -86,13 +90,12 @@ class CarControllerEUCDParams:
   EUCD_FSM4_NO_BRAKE_VALUE_V = [13276, 13299, 13318, 13338, 13333, 13377, 13449]
 
   # Camera brake acks, masked while OP brakes alone
-  EUCD_CAM_BRAKE_MASK_MSGS = frozenset({"wheelspeed1", "BrakeReqAck"})
   EUCD_CAM_BRAKE_MASK_HOLD_FRAMES = int(1.0 / DT_CTRL)
 
   EUCD_CAM_ACK_RELEASE_VALUE = 13280  # spoofed BrakeReqAck released at this FSM4 target
 
   # FSM3 mirrors camera mode 0; camera hydraulic brake followed below this
-  EUCD_CAMERA_BRAKE_HONOR_BELOW = -3.5  # m/s^2
+  EUCD_CAMERA_BRAKE_HONOR_BELOW = EUCD_ACCEL_MIN  # its emergency brake, past OP's (and the panda's) limit
   # ... or when it brakes this much harder than OP for this long: it saw what OP did not. Route 1f: a cut-in at 6 m,
   # and its abort 0x10 after ~3.4 s of braking 1.5-1.65 harder than OP with OP's own hydraulic brake at 130 km/h.
   # The hold leaves the short disagreements to OP (leads braking, routes 10 and 1a); the abort is still ~1 s ahead.

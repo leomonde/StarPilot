@@ -72,7 +72,7 @@ class EucdFullStop:
     elif self.active and v > CCP.EUCD_CAM_RESYNC_SPEED:
       # Driven off after the stop, or the planner did not stop after all
       self._resync_camera(cancelled)
-    elif (not self.active and CCP.EUCD_FULL_STOP and have_templates and not cancelled and
+    elif (not self.active and have_templates and not cancelled and
           v < CCP.EUCD_FULL_STOP_ENTER_SPEED and CC.actuators.accel < 0.):
       # OP braking slow, lead or not: OP owns the ECM with the camera's clean frames, the camera sees ACC standby
       self.active = self.cam_standby = True
@@ -135,7 +135,7 @@ class EucdFullStop:
       else:
         # Standby again for 1 s, then Set again
         self.cam_standby = True
-        self.resync_frames = -int(1.0 / DT_CTRL)
+        self.resync_frames = -int(CCP.EUCD_CAM_RESYNC_STANDBY / DT_CTRL)
 
   def reset(self):
     self.active = self.driving_off = False
@@ -180,6 +180,6 @@ class EucdFullStop:
     fsm4["ACC_Stopping"] = int(self.stopping)
     if self.holding or self.driver_gas:
       # The car holds (or the driver's gas): brake request released, like the camera 50 ms after the hold
-      fsm4 |= {"Byte_5_b7": 1, "ACC_BrakeRequest": 0, "ACC_BrakeTarget": eucd_fsm4_brake_value(0., False) & 0x3FFF}
+      fsm4 |= {"Byte_5_b7": 1, "ACC_BrakeTarget": eucd_fsm4_brake_value(0., False) & 0x3FFF}
       return fsm4, False
     return fsm4, True

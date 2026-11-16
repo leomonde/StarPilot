@@ -192,28 +192,14 @@ STOCK_BRAKE_LEVEL = ["0b146e3cce370719", "0b2d6df6cdf60732"]
 
 @pytest.mark.parametrize("stock", [bytes.fromhex(h) for h in STOCK_BRAKE_STATUS])
 def test_brake_status_relay_to_camera(stock):
-  addr, dat, bus = volvocan.create_eucd_cam_brake_status(CANPacker(DBC), parse("BrakeStatus", BRAKE_STATUS_ADDR, 25, stock), False)
+  addr, dat, bus = volvocan.create_eucd_cam_brake_status(CANPacker(DBC), parse("BrakeStatus", BRAKE_STATUS_ADDR, 25, stock))
   assert (addr, dat, bus) == (BRAKE_STATUS_ADDR, stock, 2)
-
-
-@pytest.mark.parametrize("stock", [bytes.fromhex(h) for h in STOCK_BRAKE_STATUS])
-def test_brake_status_mask_clears_brake_ack(stock):
-  out = volvocan.create_eucd_cam_brake_status(CANPacker(DBC), parse("BrakeStatus", BRAKE_STATUS_ADDR, 25, stock), True)[1]
-  assert out[4] == stock[4] & ~0x10  # 0xD5 -> 0xC5, others unchanged
-  assert out[:4] == stock[:4] and out[5:] == stock[5:]
 
 
 @pytest.mark.parametrize("stock", [bytes.fromhex(h) for h in STOCK_BRAKE_LEVEL])
 def test_brake_level_relay_to_camera(stock):
-  addr, dat, bus = volvocan.create_eucd_cam_brake_level(CANPacker(DBC), parse("BrakeLevel", BRAKE_LEVEL_ADDR, 50, stock), None)
+  addr, dat, bus = volvocan.create_eucd_cam_brake_level(CANPacker(DBC), parse("BrakeLevel", BRAKE_LEVEL_ADDR, 50, stock))
   assert (addr, dat, bus) == (BRAKE_LEVEL_ADDR, stock, 2)
-
-
-@pytest.mark.parametrize("stock", [bytes.fromhex(h) for h in STOCK_BRAKE_LEVEL])
-def test_brake_level_mask_holds_brake_level(stock):
-  out = volvocan.create_eucd_cam_brake_level(CANPacker(DBC), parse("BrakeLevel", BRAKE_LEVEL_ADDR, 50, stock), 0x14)[1]
-  assert out[1] == (stock[1] & 0x80) | 0x14
-  assert out[0] == stock[0] and out[2:] == stock[2:]
 
 
 WHEELSPEED1_ADDR = 0x220
@@ -274,11 +260,6 @@ ENGINE_DATA = 0x12A
 def test_ecm_acc_state_decoding(b4, state):
   dat = bytes([0xEA, 0x00, 0xC7, 0xF8, b4, 0xF8, 0xE5, 0x7A])
   assert int(parse("EngineData", ENGINE_DATA, 66, dat)["ACC_State_ECM"]) == state
-
-
-def test_cam_brake_mask_msgs_are_relayed_messages():
-  # Only relayed messages can be masked
-  assert CarControllerParams.EUCD_CAM_BRAKE_MASK_MSGS <= {"BrakeLevel", "BrakeStatus", "wheelspeed1", "BrakeReqAck"}
 
 
 @pytest.mark.parametrize("stock", [bytes.fromhex(h) for h in STOCK_WHEELSPEED1])

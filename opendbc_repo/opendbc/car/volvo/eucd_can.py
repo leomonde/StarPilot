@@ -146,20 +146,14 @@ def create_eucd_fsm0(packer, stock_fsm0, ecm_engaged: bool):
   return packer.make_can_msg("FSM0", 0, values)
 
 
-def create_eucd_cam_brake_status(packer, stock_brake_status, mask: bool):
-  # BrakeStatus to the camera; masked clears brake applied
-  values = _eucd_copy(stock_brake_status)
-  if mask:
-    values["BrakeApplied"] = 0
-  return packer.make_can_msg("BrakeStatus", CANBUS.cam, values)
+def create_eucd_cam_brake_status(packer, stock_brake_status):
+  # BrakeStatus to the camera, unchanged (the panda blocks it)
+  return packer.make_can_msg("BrakeStatus", CANBUS.cam, _eucd_copy(stock_brake_status))
 
 
-def create_eucd_cam_brake_level(packer, stock_brake_level, frozen_level: int | None):
-  # BrakeLevel to the camera; masked holds the brake level
-  values = _eucd_copy(stock_brake_level)
-  if frozen_level is not None:
-    values["BrakeLevel"] = frozen_level & 0x7F
-  return packer.make_can_msg("BrakeLevel", CANBUS.cam, values)
+def create_eucd_cam_brake_level(packer, stock_brake_level):
+  # BrakeLevel to the camera, unchanged (the panda blocks it)
+  return packer.make_can_msg("BrakeLevel", CANBUS.cam, _eucd_copy(stock_brake_level))
 
 
 def create_eucd_cam_wheel_status(packer, stock_wheelspeed1, mask: bool, spoof: bool = False, hide_hold: bool = False,
