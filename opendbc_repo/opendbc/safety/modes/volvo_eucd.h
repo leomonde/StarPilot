@@ -84,8 +84,7 @@ static void volvo_eucd_rx_hook(const CANPacket_t *msg) {
     if (addr == VOLVO_EUCD_AccPedal) {
       // Signal: AccPedal
       unsigned int gas_raw = (((unsigned int)msg->data[2] & 0x03U) << 8) | (unsigned int)msg->data[3];
-      // 10% to press, under 9% to release: a foot held at 10% flickered it each frame (route 00000007, 273.7 s),
-      // dropping and restoring OP's long out of step with the host, which ended the drive with controlsMismatch
+      // 10% to press, under 9% to release, or a held foot flickers it (route 00000007, 273.7 s)
       gas_pressed = gas_raw >= (gas_pressed ? VOLVO_EUCD_GAS_RELEASE : VOLVO_EUCD_GAS_PRESS);
     }
 
@@ -100,8 +99,7 @@ static void volvo_eucd_rx_hook(const CANPacket_t *msg) {
     }
 
     if (addr == VOLVO_EUCD_PSCM1) {
-      // Signal: SteeringAngleServo (16-bit big-endian, bytes 2-3, factor 0.0447, offset -1465 deg).
-      // Stored as angle_deg * 100 to match VOLVO_EUCD_STEERING_LIMITS.angle_deg_to_can in the tx hook.
+      // Signal: SteeringAngleServo (factor 0.0447, offset -1465 deg), stored as angle_deg * 100
       unsigned int angle_raw = ((unsigned int)msg->data[2] << 8) | (unsigned int)msg->data[3];
       int angle_meas_new = ROUND(((angle_raw * 0.0447f) - 1465.0f) * 100.0f);
       update_sample(&angle_meas, angle_meas_new);
@@ -138,8 +136,7 @@ static void volvo_eucd_optional_rx(const CANPacket_t *msg) {
   }
 }
 
-// EUCD sends LKAAngleReq=0 with LKASteerDirection=NONE when not steering, so the commanded angle must
-// be exactly zero while disabled, not near the measurement like the shared angle check requires.
+// EUCD sends LKAAngleReq=0 when not steering, so the angle must be exactly zero while disabled
 static bool volvo_eucd_angle_cmd_checks(int desired_angle, const AngleSteeringLimits limits) {
   const bool allowed = lateral_controls_allowed();
   bool violation = false;
@@ -180,8 +177,7 @@ static bool volvo_eucd_tx_hook(const CANPacket_t *msg) {
     },
   };
 
-  // FSM3 byte1 = ACC_AccelerationRequest (factor 0.04, offset -5.04); raw_accel = byte1 - 126.
-  // +50 raw = +2.0 m/s^2 max accel; -88 raw = -3.52 m/s^2 max decel (openpilot's -3.5 on the 0.04 step).
+  // FSM3 byte1 accel: raw = byte1 - 126, 0.04 m/s^2 per step (+2.0 to -3.52)
   static const LongitudinalLimits VOLVO_EUCD_LONG_LIMITS = {
     .max_accel = 50,
     .min_accel = -88,
@@ -192,14 +188,12 @@ static bool volvo_eucd_tx_hook(const CANPacket_t *msg) {
   bool violation = false;
   const unsigned int addr = msg->addr;
 
-  // Only ACC engaged: lateral has its own AOL axis, while a late host request must not drop the camera's
-  // frames on their way to the ECM, as the fwd hook blocks them on this same condition.
+  // Only ACC engaged, the same condition the fwd hook blocks the camera's frames on
   const bool long_allowed = controls_allowed && !gas_pressed_prev;
 
   // CC buttons to the car; the camera bus gets every CEM frame relayed, which cannot engage the ECM
   if ((addr == VOLVO_EUCD_CCButtons) && (msg->bus == VOLVO_EUCD_MAIN_BUS)) {
-    // Violation if resume button is pressed while controls not allowed, or
-    // if cancel button is pressed when cruise isn't engaged.
+    // No resume without controls allowed, no cancel without cruise engaged
     violation |= !cruise_engaged_prev && (GET_BIT(msg, 59U) || !(GET_BIT(msg, 43U)));  // Signals: ACCOnOffBtn, ACCOnOffBtnInv (cancel)
     violation |= !controls_allowed && (GET_BIT(msg, 61U) || !(GET_BIT(msg, 45U)));  // Signals: ACCResumeBtn, ACCResumeBtnInv (resume)
   }
@@ -212,13 +206,11 @@ static bool volvo_eucd_tx_hook(const CANPacket_t *msg) {
 
   // Safety check for Lane Keep Assist action.
   if (addr == VOLVO_EUCD_FSM2) {
-    // Signal: LKAAngleReq (14-bit big-endian over bytes 3-4, factor 0.04, offset -327.68 deg).
-    // raw*0.04 - 327.68 deg, carried here as angle_deg * 100 => raw*4 - 32768.
+    // Signal: LKAAngleReq (14 bits, 0.04 deg, offset -327.68), as angle_deg * 100
     unsigned int angle_raw = (((unsigned int)msg->data[3] & 0x3FU) << 8) | (unsigned int)msg->data[4];
     int desired_angle = ((int)angle_raw * 4) - 32768;
 
-    // Gate on the angle command, not LKASteerDirection: EUCD needs a ~8-frame NONE pause on a
-    // direction change while OP still emits a tracking angle; gating direction would stall lateral.
+    // Gate on the angle, not LKASteerDirection, which pauses ~8 frames on a direction change
     if (volvo_eucd_angle_cmd_checks(desired_angle, VOLVO_EUCD_STEERING_LIMITS)) {
       violation = true;
     }
@@ -232,14 +224,10 @@ static bool volvo_eucd_tx_hook(const CANPacket_t *msg) {
     }
   }
 
-  // Longitudinal control: gate on controls_allowed + range check.
-  // check_relay=false lets stock FSM3 flow cam->main; OP overlays only when long-active.
+  // Long: controls_allowed and range check; stock FSM3 still flows cam->main
   if (addr == VOLVO_EUCD_FSM3) {
     int raw_accel = (int)msg->data[1] - 126;
-    // When controls are not allowed, only the inactive (neutral) accel is permitted so OP
-    // can relay stock FSM3 at 50Hz without faulting the ECU. When controls are allowed,
-    // enforce the standard accel range.
-    // The camera's own frame (its hard brake below the limit) may go back unchanged while OP's long is allowed.
+    // Neutral accel only without controls; with them the accel range, or the camera's own hard-brake frame
     const bool cam_frame = long_allowed && volvo_eucd_cam_frames_match(&volvo_eucd_cam_fsm3, msg);
     bool accel_violation;
     if (controls_allowed) {

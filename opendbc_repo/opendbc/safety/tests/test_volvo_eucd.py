@@ -20,8 +20,7 @@ DRIVE, REVERSE = 3, 1
 
 
 class TestVolvoEUCD(common.CarSafetyTest, common.AngleSteeringSafetyTest):
-  """Volvo EUCD: V60 2010-18, with openpilot longitudinal. Stock FSM1/FSM3 are relayed to the ECM at 50 Hz,
-  overlaid with OP's accel/mode when active, so it has its own accel-range and fwd-hook coverage."""
+  """Volvo EUCD (V60 2010-18) with openpilot longitudinal over the relayed stock FSM1/FSM3."""
   TX_MSGS = [[0x051, VOLVO_MAIN_BUS], [0x127, VOLVO_MAIN_BUS], [0x260, VOLVO_MAIN_BUS], [0x262, VOLVO_MAIN_BUS],
              [0x270, VOLVO_MAIN_BUS], [0x31A, VOLVO_MAIN_BUS], [0x246, VOLVO_PARTY_BUS], [0x133, VOLVO_PARTY_BUS],
              [0x323, VOLVO_PARTY_BUS], [0x220, VOLVO_PARTY_BUS], [0x299, VOLVO_PARTY_BUS], [0x1FF, VOLVO_PARTY_BUS],
@@ -46,8 +45,7 @@ class TestVolvoEUCD(common.CarSafetyTest, common.AngleSteeringSafetyTest):
     self.safety.init_tests()
 
   def _angle_cmd_msg(self, angle: float, enabled: bool, increment_timer: bool = True):
-    # LKAAngleReq carries the signed angle the safety rate-limits. LKASteerDirection is the car's per-frame actuation
-    # gate, but not used by the safety: it drops to NONE during the anti-windup pause while OP stays engaged.
+    # The safety checks LKAAngleReq only; LKASteerDirection drops to NONE in the anti-windup pause
     direction = (2 if angle > 0 else 1) if enabled else 0
     values = {"LKAAngleReq": angle, "LKASteerDirection": direction}
     return self.packer.make_can_msg_safety("FSM2", VOLVO_MAIN_BUS, values)
@@ -76,8 +74,7 @@ class TestVolvoEUCD(common.CarSafetyTest, common.AngleSteeringSafetyTest):
       self.assertEqual(pressed, self.safety.get_gas_pressed_prev(), f"{pedal=}")
 
   def test_ecm_acc_off_is_not_engaged(self):
-    # EngineData ACC_State_ECM: 1 off, 2 standby, 3 engaged. Turning ACC off (On/Off in standby) gives 1,
-    # which has bit 4 set like engaged (route 823); only 3 allows controls
+    # ACC_State_ECM: 1 off, 2 standby, 3 engaged; only 3 allows controls (route 823)
     for state, engaged in ((1, False), (2, False), (3, True)):
       self.safety.set_controls_allowed(False)
       self._rx(self._pcm_status_msg(False))
@@ -118,8 +115,7 @@ class TestVolvoEUCD(common.CarSafetyTest, common.AngleSteeringSafetyTest):
     return self.packer.make_can_msg_safety("FSM3", VOLVO_MAIN_BUS, values)
 
   def test_longitudinal_relay_when_controls_not_allowed(self):
-    # OP relays FSM3 at 50Hz even when controls are not allowed (to keep the ECU alive).
-    # The safety hook must allow inactive accel (0.0) and block any non-zero accel.
+    # FSM3 relayed without controls: only the inactive accel passes
     self.safety.set_controls_allowed(False)
     self.assertTrue(self._tx(self._longitudinal_cmd_msg(0.0)))    # neutral — must pass
     self.assertFalse(self._tx(self._longitudinal_cmd_msg(1.0)))   # any accel — must be blocked
@@ -173,8 +169,7 @@ class TestVolvoEUCD(common.CarSafetyTest, common.AngleSteeringSafetyTest):
     self.assertFalse(self._tx(self._cam_frame("FSM4", brake | {"ACC_BrakeTarget": 12000}, VOLVO_MAIN_BUS)))
 
   def test_fwd_hook_blocks_fsm_when_controls_allowed(self):
-    # When controls are allowed and gas is not pressed, OP relays FSM1/FSM3 itself,
-    # so stock cam->main messages for those addrs must be blocked.
+    # With controls and no gas OP sends FSM1/FSM3 itself, so the stock ones are blocked
     for controls_allowed in (True, False):
       for gas_pressed in (True, False):
         self.safety.set_controls_allowed(controls_allowed)
@@ -225,8 +220,7 @@ class TestVolvoEUCD(common.CarSafetyTest, common.AngleSteeringSafetyTest):
     self._rx(self._user_gas_msg(True))
     self.assertEqual({0x260: True, 0x270: True}, forwarded())
 
-  # Volvo gates the angle command on engagement, not on the LKASteerDirection flag, and only a zero
-  # angle passes while disengaged. These mirror AngleSteeringSafetyTest with those expectations.
+  # AngleSteeringSafetyTest with the angle gated on engagement and only zero while disengaged
   def test_angle_cmd_when_disabled(self):
     for controls_allowed in (True, False):
       self.safety.set_controls_allowed(controls_allowed)
@@ -342,6 +336,20 @@ class TestVolvoEUCDAol(unittest.TestCase):
     self.assertEqual(LATERAL | LONGITUDINAL, self.safety.aol_get_permission_mask())
     brake = {"ACC_BrakeRequest": 1, "ACC_BrakeTarget": 12900, "Byte_5_b7": 1}
     self.assertFalse(self.safety.safety_tx_hook(self.packer.make_can_msg_safety("FSM4", VOLVO_MAIN_BUS, brake)))
+
+  def test_brake_held_at_a_stop_keeps_the_longitudinal_permission(self):
+    # Engaged with the brake held at a stop (preEnable): the permission follows controls_allowed (route 00000027)
+    self._healthy(main=True, engaged=True)
+    self._rx("Brake_Info", 0, {"BrakePedal": 2})
+    self._rx("VehicleSpeed1", 0, {"VehicleSpeed": 0})
+    self.safety.set_controls_allowed(True)
+    self.safety.aol_set_host_request(LATERAL | LONGITUDINAL)
+    self.assertEqual(LATERAL | LONGITUDINAL, self.safety.aol_get_permission_mask())
+    # A new press clears controls_allowed, and the permission with it
+    self._rx("Brake_Info", 0, {"BrakePedal": 1})
+    self._rx("Brake_Info", 0, {"BrakePedal": 2})
+    self.assertFalse(self.safety.get_controls_allowed())
+    self.assertEqual(LATERAL, self.safety.aol_get_permission_mask())
 
   def test_stock_frames_do_not_depend_on_the_host_request(self):
     # The camera's frames are blocked from the ECM while engaged, so OP's relay must keep passing without an AOL request

@@ -1,21 +1,4 @@
-"""Volvo V60 (EUCD) car controller: OP replaces the camera's (FSM) ACC requests on their way to the ECM.
-
-The camera keeps running its own ACC under OP and checks that the car follows it. OP owns acceleration and
-braking; the camera's request is used only in these cases (parameters in eucd_params.py):
-
-1. Hard brake: the camera asks for less than EUCD_CAMERA_BRAKE_HONOR_BELOW (-3.5 m/s^2, the panda's limit).
-   Followed at once; below OP's limit its own FSM3/FSM4 go out unchanged (its emergency brake).
-2. Lasting harder brake: the camera's brake request is on and it asks for more than EUCD_CAMERA_BRAKE_HONOR_DELTA
-   (1.5 m/s^2) harder than OP for EUCD_CAMERA_BRAKE_HONOR_DELTA_TIME (2 s). It saw what OP did not (a cut-in) or
-   would abort with 0x10 after ~3.4 s of OP braking less than it (route 1f). Short disagreements stay OP's.
-   Cases 1 and 2 are latched until the camera releases its brake request (_eucd_camera_brake).
-3. FSM3 mode: while the camera is in its brake mode, FSM3 carries it (_eucd_fsm3_mode).
-
-OP's acceleration is never limited by the camera's: a cap on it with the camera's target closer than 1.5 s cut OP
-14 % of the time in traffic (route 22, 0.45 m/s^2 on average), falling behind and then surging as the request wound up.
-
-Never the camera's: OP's own stop to 0 and hold (eucd_full_stop.py), and the driver's gas (coast, no request).
-"""
+"""Volvo V60 (EUCD) controller; camera takes over only on hard brake, a 1.5 m/s^2 harder brake for 2 s, or its brake mode."""
 import math
 
 from opendbc.can.packer import CANPacker
@@ -233,8 +216,7 @@ class CarControllerEUCD(CarControllerBase):
                                self.eucd_long_mode != LongMode.BRAKE and not self.eucd_full_stop.active)
 
     stock_fsm3 = self.eucd_full_stop.fsm3(CS)
-    # OP's own frames within the panda's limit: following the camera can go past it (route 895, 384.3 s), its own
-    # frames then go out instead (eucd_cam_hard_brake)
+    # Within the panda's limit; past it the camera's own frames go out (route 895, 384.3 s)
     accel = max(accel, CarControllerEUCDParams.EUCD_ACCEL_MIN)
     if self.eucd_sng_ack_frames > 0:
       acc_check = 1
@@ -303,8 +285,7 @@ class CarControllerEUCD(CarControllerBase):
 
   @staticmethod
   def _eucd_slope_brake_offset(CC, v_ego=None):
-    """Slope part of the coast accel from pitch, faded out slow: there coasting does not slow the car even uphill
-    (route 22, 878 s: +3 deg, OP coasting at -0.3..-0.5, the car held its speed)."""
+    """Coast accel from pitch, faded out at low speed where coasting does not slow the car (route 22, 878 s)."""
     if len(CC.orientationNED) != 3:
       return 0.
     CCP = CarControllerEUCDParams

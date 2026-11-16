@@ -1,7 +1,6 @@
 #pragma once
 
-// Optional V60 profile: lateral without ACC engaged, with the driver's LKA on or the ACC main on.
-// Host requests never create permission: they only narrow what these vehicle states allow.
+// V60 AOL: lateral with the LKA or ACC main on; host requests only narrow it
 #define VOLVO_EUCD_GEAR_SELECTOR 0x063U
 #define VOLVO_EUCD_AOL_GEAR_MAX_AGE_US 300000U
 
@@ -35,10 +34,8 @@ static uint8_t volvo_eucd_aol_permission(void) {
   if (drive && (acc_main_on || volvo_eucd_aol_lka_on)) {
     permission = request & 1U;
   }
-  // The driver's gas is an override, as in stock openpilot: OP's longitudinal frames stay blocked by the tx hook's
-  // !gas_pressed_prev, but the permission is kept, or the host takes the press as a lost axis and drops the AOL latch
-  // until a new baseline (route 0000000a, 47.8 s: pink frame for ~0.7 s after each gas release while steering).
-  if (drive && controls_allowed && !brake_pressed) {
+  // No gas or brake check, as the tx hook: denying them dropped the AOL latch, a pink frame (routes 0000000a, 00000027)
+  if (drive && controls_allowed) {
     permission |= request & 2U;
   }
   return permission;

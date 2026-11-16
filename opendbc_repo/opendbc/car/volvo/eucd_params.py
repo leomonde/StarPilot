@@ -70,9 +70,7 @@ class CarControllerEUCDParams:
   # FSM3 mode hysteresis on OP accel
   EUCD_BRAKE_ENTER = -0.50  # m/s^2, at and above EUCD_BRAKE_ENTER_BP[-1]
   EUCD_BRAKE_EXIT = -0.15
-  # Slower, BRAKE enters earlier, as the camera's own (route 22: it brakes from -0.1 below 20 km/h, from ~-0.2 at
-  # 20-40). Coasting there does not slow the car, D creeps on: OP coasting at -0.1..-0.6 sped the car up 34-69 % of
-  # the time and its stops ended at 1.6-5 m instead of the planner's 6 m (routes 0a, 22, 24).
+  # Slower, BRAKE enters earlier like the camera's, as coasting there does not slow the car (routes 0a, 22, 24)
   EUCD_BRAKE_ENTER_BP = [15. * CV.KPH_TO_MS, 40. * CV.KPH_TO_MS]
   EUCD_BRAKE_ENTER_V = [-0.10, EUCD_BRAKE_ENTER]
   EUCD_BRAKE_HYSTERESIS = EUCD_BRAKE_EXIT - EUCD_BRAKE_ENTER  # exit this much above the enter, never above 0
@@ -96,9 +94,7 @@ class CarControllerEUCDParams:
 
   # FSM3 mirrors camera mode 0; camera hydraulic brake followed below this
   EUCD_CAMERA_BRAKE_HONOR_BELOW = EUCD_ACCEL_MIN  # its emergency brake, past OP's (and the panda's) limit
-  # ... or when it brakes this much harder than OP for this long: it saw what OP did not. Route 1f: a cut-in at 6 m,
-  # and its abort 0x10 after ~3.4 s of braking 1.5-1.65 harder than OP with OP's own hydraulic brake at 130 km/h.
-  # The hold leaves the short disagreements to OP (leads braking, routes 10 and 1a); the abort is still ~1 s ahead.
+  # ... or when it brakes this much harder than OP for this long, before its 0x10 abort at ~3.4 s (route 1f)
   EUCD_CAMERA_BRAKE_HONOR_DELTA = 1.5  # m/s^2
   EUCD_CAMERA_BRAKE_HONOR_DELTA_TIME = 2.0  # s
   # BRAKE thresholds shifted by the slope's coast accel
@@ -107,8 +103,7 @@ class CarControllerEUCDParams:
   # Extra uphill margin before BRAKE
   EUCD_UPHILL_BRAKE_ENTER_EXTRA = 0.6  # fraction of the uphill offset
 
-  # Accel request rate limits: the planner already limits jerk. Falling only against jumps (as Toyota's 12 m/s^3);
-  # rising kept moderate, the camera's accel cap can release a wound-up request (route 1f, 678 s: +0.88 -> +1.75)
+  # Accel rate limits: falling only against jumps (as Toyota), rising moderate (route 1f, 678 s)
   EUCD_JERK_UP = 4.0     # m/s^3
   EUCD_JERK_DOWN = 12.0  # m/s^3
 

@@ -49,8 +49,7 @@ class CarStateEUCD(CarStateBase):
     ret.vEgo, ret.aEgo = self.update_speed_kf(ret.vEgoRaw)
     ret.standstill = ret.vEgoRaw < 0.1
 
-    # gas pedal
-    # 10% to press, under 9% to release, as the panda: a foot held at 10% flickered it each frame (route 00000007)
+    # Gas: 10% to press, under 9% to release, as the panda (route 00000007)
     self.eucd_gas_pressed = pt_cp.vl["AccPedal"]["AccPedal"] >= (9 if self.eucd_gas_pressed else 10)
     ret.gasPressed = self.eucd_gas_pressed
 
@@ -144,8 +143,7 @@ class CarStateEUCD(CarStateBase):
       pressed = bool(pt_cp.vl["CCButtons"][signal]) and not pt_cp.vl["CCButtons"][signal + "Inv"]
       button_events.extend(create_button_events(pressed, self.eucd_gap_button_states[signal], {True: ButtonType.gapAdjustCruise}))
       self.eucd_gap_button_states[signal] = pressed
-    # On/Off is the driver's cancel: reported as such, the press reaches controls before the ECM disengages
-    # (~30 ms), so OP disengages on the driver's cancel and not on the panda's lost permission (route 22, 418.4 s)
+    # Driver's On/Off as cancel, so OP disengages before the panda drops permission (route 22, 418.4 s)
     driver_onoff = bool(pt_cp.vl["CCButtons"]["ACCOnOffBtn"]) and not pt_cp.vl["CCButtons"]["ACCOnOffBtnInv"]
     button_events.extend(create_button_events(driver_onoff, self.eucd_driver_onoff, {True: ButtonType.cancel}))
     self.eucd_driver_onoff = driver_onoff
