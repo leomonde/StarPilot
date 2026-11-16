@@ -7,18 +7,24 @@ export function dialPercent(value) {
 }
 
 export function ideaStatus(row) {
+  if (row.reason === 'partial_drive_provisional_only') return 'Partial-drive suggestion'
   if (row.target === null) return 'Conflicting findings'
   if (row.reason === 'heldout_profile_does_not_support_training_step') return 'Not confirmed across the drive'
+  if (row.reason === 'training_candidate_not_independently_confirmed') return 'Possible change'
+  if (row.reason === 'independent_support_for_frozen_training_profile') return 'Repeated finding'
   return 'Suggested change'
 }
 
 export function ideaExplanation(row) {
   if (!isConsistentSuggestion(row)) return 'Different parts of the drive did not support the same change. Your tune was left unchanged.'
+  const source = row.earlierDrive ? 'From an earlier drive with the same setup. ' : ''
   const next = SURFACE_NAMES.includes(row.parameter) ? ' You can review the suggested value and adjust this setting manually while parked.' :
     ' Auto Learn will review it as more driving is recorded.'
+  if (row.reason === 'partial_drive_provisional_only')
+    return source + 'This suggestion comes from intact sections of an incomplete recording. Auto Learn will not save it automatically.' + next
   if (row.reason === 'independent_support_for_frozen_training_profile')
-    return 'Separate parts of your drive support this suggestion. Auto Learn still needs to confirm the controller checks before saving it.' + next
-  return 'Your drive suggests this change, but Auto Learn needs more evidence before saving it automatically.' + next
+    return source + 'Separate parts of your drive support this suggestion. Auto Learn still needs to confirm the controller checks before saving it.' + next
+  return source + 'Your drive suggests this change, but Auto Learn needs more evidence before saving it automatically.' + next
 }
 
 export function reviewModel(route, historical = false, updating = false) {
@@ -49,26 +55,26 @@ export function reviewModel(route, historical = false, updating = false) {
     title = 'Auto Learn saved a tune'
     description = 'These are the last reported saved values. The controller checks that they match your setup before using them.'
     tone = 'saved'
-    next = 'A new drive is needed to measure the saved trial. Saved does not mean verified or currently in use.'
+    next = 'Your saved adjustments are ready for your next drive.'
   } else if (route.configurationState === 'rolled_back') {
     title = 'Your previous tune was restored'
     description = 'The trial was rolled back. Any other ideas below are separate from the restored tune.'
     tone = 'neutral'
     next = 'The restored values are listed in Your tune. Other findings are separate ideas.'
-  } else if (['accepted', 'accepted_after_drive'].includes(route.configurationState)) {
+  } else if (['accepted', 'accepted_after_drive', 'retained_after_drive'].includes(route.configurationState)) {
     title = 'Your learned tune is saved'
     description = 'Your learned values are saved. In-use status is reported separately during driving.'
     tone = 'saved'
     next = 'The learned values are saved. The controller reports their use separately during driving.'
   }
-  if (route.saved && !['ready_for_next_drive', 'accepted', 'accepted_after_drive', 'rolled_back'].includes(route.configurationState)) {
+  if (route.saved && !['ready_for_next_drive', 'accepted', 'accepted_after_drive', 'retained_after_drive', 'rolled_back'].includes(route.configurationState)) {
     title = 'A configuration change was reported'
     description = 'The report does not identify its saved state. Check the latest report before treating it as ready for the next drive.'
     tone = 'neutral'
     next = 'Wait for a complete saved-state report before treating the change as ready.'
   }
   if (historical && !updating) {
-    if (saved.length || ['ready_for_next_drive', 'accepted', 'accepted_after_drive'].includes(route.configurationState)) {
+    if (saved.length || ['ready_for_next_drive', 'accepted', 'accepted_after_drive', 'retained_after_drive'].includes(route.configurationState)) {
       tone = 'neutral'
       title = 'Previously saved tune'
       description = 'These saved values come from an earlier report. Current use is shown separately during driving.'
@@ -76,6 +82,13 @@ export function reviewModel(route, historical = false, updating = false) {
     }
   }
 
+  if (route.partial) {
+    title = 'Part of your drive could be reviewed'
+    description = `${route.partialSegments[0]} of ${route.partialSegments[1]} recorded sections were usable. Your saved tune stayed the same.`
+    next = count ? 'These are provisional suggestions from those sections. This partial review will not change your tune automatically.' :
+      'No supported suggestion was found in the usable sections. Your existing tune was kept.'
+    tone = count ? 'review' : 'neutral'
+  }
   return { title, description, next, tone, manual, manualGroups, curve, other, findings, saved, areas, count, historical }
 }
 
@@ -102,7 +115,8 @@ export function curvePointLabel(name) {
 }
 
 export function ideaDetails(row) {
-  const baseline = Number.isFinite(row.baseline) ? [{ label: 'Starting value', value: dialPercent(row.baseline) }] : []
+  const baseline = [ ...(row.sourceRoute ? [{ label: 'Source drive', value: row.sourceRoute }] : []),
+    ...(Number.isFinite(row.baseline) ? [{ label: 'Starting value', value: dialPercent(row.baseline) }] : []) ]
   if (row.target === null) return [...baseline, { label: 'Suggested value', value: 'No single suggested value' }]
   if (row.target === undefined) return [...baseline, { label: 'Suggested change', value: (row.delta > 0 ? '+' : '') + dialPercent(row.delta) }]
   return [...baseline, { label: 'Suggested value', value: dialPercent(row.target) }]

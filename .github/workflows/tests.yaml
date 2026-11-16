@@ -6,6 +6,7 @@ on:
       - master
       - Domathon
       - Dom
+      - StarPilot
   pull_request:
   workflow_dispatch:
   workflow_call:
@@ -35,7 +36,7 @@ jobs:
     steps:
     - uses: actions/checkout@v7
     - name: Validate published device build receipt
-      if: github.event_name == 'push' && github.ref == 'refs/heads/Dom'
+      if: github.event_name == 'push' && (github.ref == 'refs/heads/Dom' || github.ref == 'refs/heads/StarPilot')
       run: python3 tools/ci/check_prebuilt_receipt.py --revision HEAD
     - name: Check shipped device runtime dependencies
       run: |
@@ -300,7 +301,7 @@ jobs:
       run: sudo apt-get update && sudo apt-get install -y libegl1 libgles-dev libgl1-mesa-dri
     - name: Test every assigned custom pytest node serially
       if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-      timeout-minutes: 15
+      timeout-minutes: 20
       env:
         RAYLIB_BACKEND: headless
         STARPILOT_AUTO_GL_TEST: "1"

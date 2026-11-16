@@ -106,7 +106,6 @@ class SpeedLimitObservation:
   last_received_speed_limit_mps: float | None = None
   last_received_source: str = 'none'
   last_received_adjusted_limit_mps: float | None = None
-  sign_recovering: bool = False
 
   def __post_init__(self) -> None:
     for value in (self.speed_limit_mps, self.offset_mps, self.pending_speed_limit_mps,
@@ -333,6 +332,10 @@ def _inside_widget(x, y, state, widget, bounds):
   return left + dx <= x <= right + dx and top + dy <= y <= bottom + dy
 
 
+# Tap area above and below the sign, grown with the large sign so its tallest outline stays inside.
+SIGN_PADDING = {Profile.LARGE: (19, 26), Profile.COMPACT: (12, 8)}
+
+
 def speed_limit_bounds(profile: Profile, state: OnroadState) -> tuple[float, float, float, float] | None:
   from openpilot.starpilot.ui.unified_speed_presentation import displayed_limit_mps
   if (displayed_limit_mps(state.speed_limit) is None or
@@ -347,7 +350,8 @@ def speed_limit_bounds(profile: Profile, state: OnroadState) -> tuple[float, flo
   else:
     x, y, width, height = LIMIT_RECTS[profile]
     dx, dy = offset(state.customization, profile, widget)
-    bounds = x + dx - 12, y + dy - 12, x + dx + width + 12, y + dy + height + 8
+    top, bottom = SIGN_PADDING[profile]
+    bounds = x + dx - 12, y + dy - top, x + dx + width + 12, y + dy + height + bottom
     if profile == Profile.COMPACT and bounds[1] < 12:
       shift = 12 - bounds[1]
       bounds = bounds[0], bounds[1] + shift, bounds[2], bounds[3] + shift

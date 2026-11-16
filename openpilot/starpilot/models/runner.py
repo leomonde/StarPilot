@@ -208,7 +208,11 @@ class CatalogModelState:
   def move_warp_output(self, coherent_warp: Callable[[Any], None]) -> None:
     """On a comma, move this warp's output to memory the CPU reads cached with `coherent_warp` (Jetlink's
     make_coherent), for the link to send from. Before warmup(), whose first call links the warp to its address."""
-    buffer = self.warp_enqueue.captured.ret.uop.base.buffer
+    output = getattr(getattr(self.warp_enqueue, "captured", None), "ret", None)
+    if not isinstance(output, Tensor):
+      self.warp_copied = "warp has no captured Tensor output"
+      return
+    buffer = output.uop.base.buffer
     if not buffer.device.startswith("QCOM"):
       self.warp_copied = f"a {buffer.device} buffer"
       return
@@ -220,6 +224,8 @@ class CatalogModelState:
     self.warp_copied = None
 
   def _reset_state(self) -> None:
+    for replay in getattr(self, "_laboratory_replays", ()):
+      replay.clear()
     from openpilot.starpilot.models.compile import make_stateful_input_queues, make_supercombo_input_queues, make_split_input_queues
 
     if self.onnx_history:

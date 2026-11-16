@@ -363,12 +363,12 @@ for (const reason of ['trial_started_waiting_for_comparable_drive', 'trial_measu
   ctx.report.current.details['Analysis decision'] = reason
   const state = tunerStatus(ctx.report, false, false, '', true)
   assert.equal(state.key, 'next-drive')
-  assert(state.description.includes('trial'))
+  assert.equal(state.description, 'Your saved steering adjustments are kept for the next drive.')
   assert.notEqual(state.description, tunerStatus({ ...ctx.report, current: { ...ctx.report.current,
     details: { ...ctx.report.current.details, 'Analysis decision': 'bounded_trial_configured_for_next_drive' } } }, false, false, '', true).description)
   assert.equal(ctx.currentApplied, false, 'A pending retry cannot fabricate applied or accepted steering')
 }
-console.log('Inconclusive next-drive trials remain visibly provisional without fabricated application')
+console.log('Inconclusive next-drive trials keep saved settings without fabricated application')
 
 // Complete, read-only dial advice is independent of automatic-tune approval.
 const advisoryNames = [...SURFACE_NAMES, ...FRICTION_NAMES]
@@ -431,7 +431,7 @@ const historicalAdvisory = structuredClone(singleAdvisory)
 historicalAdvisory.current.status = 'fitting'
 historicalAdvisory.current.reason = 'analyzing_last_completed_drive'
 historicalAdvisory.current.details['Earlier analysis shown while updating'] = true
-assert(tunerStatus(historicalAdvisory, false, false, '', true).description.includes('Earlier completed-drive findings'))
+assert(tunerStatus(historicalAdvisory, false, false, '', true).description.includes('Earlier drive findings'))
 assert(offroadCoordinateEvidence(historicalAdvisory, 'ff_gain_left').startsWith('Earlier analyzed drive'))
 historicalAdvisory.preference = { version: 1, valid: true, enabled: true, parked: true, vehicle: 'OTHER_CAR' }
 assert.equal(offroadView(historicalAdvisory), null, 'Earlier advice must not be relabeled for another reported vehicle')

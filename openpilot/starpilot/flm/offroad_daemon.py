@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import sys
 import tempfile
 import time
 import traceback
@@ -12,8 +13,6 @@ from typing import Any
 from openpilot.cereal import messaging
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
-from openpilot.starpilot.flm.offroad_route import RouteInputError
-from openpilot.starpilot.flm.offroad_worker import OffroadWorker
 from openpilot.starpilot.flm.training_report import report_path, READ_MAX_BYTES, _report_bounded
 
 
@@ -38,11 +37,12 @@ class StatusReport:
     # Keep the last completed findings and saved values readable during a fit.
     # They are historical display data, never current application or permission.
     fields = ('completed_route', 'vehicle', 'analysis_counts', 'recorded_tracking', 'source_sha256', 'assessment_sha256',
-              'recommendations', 'suggestions', 'suggestion_count', 'source_is_latest', 'latest_recording', 'skipped_routes')
+              'recommendations', 'suggestions', 'suggestion_count', 'source_is_latest', 'latest_recording', 'skipped_routes',
+              'partial_drive', 'partial_segments', 'omitted_segments', 'recommendation_sources')
     previous = {key: self.previous[key] for key in fields if key in self.previous}
     if previous:
       previous['retained_decision'] = self.previous.get('retained_decision', self.previous.get('reason', 'waiting_for_completed_drive'))
-      if self.previous.get('configuration_state') in ('ready_for_next_drive', 'accepted', 'accepted_after_drive', 'rolled_back'):
+      if self.previous.get('configuration_state') in ('ready_for_next_drive', 'accepted', 'accepted_after_drive', 'retained_after_drive', 'rolled_back'):
         for key in ('configuration_state', 'configured_values', 'saved_adjustments', 'qualification_summary'):
           if key in self.previous:
             previous[key] = self.previous[key]
@@ -66,10 +66,11 @@ class StatusReport:
           continue
         document = cache.get(value['assessment_sha256'])
         source = document['assessment']['route']
-        if (document['kind'] != 'completed_assessment' or source['route_id'] != value.get('completed_route')
+        partial = document['kind'] == 'partial_assessment' and value.get('partial_drive') is True
+        if (document['kind'] != 'completed_assessment' and not partial or source['route_id'] != value.get('completed_route')
             or source['source_sha256'] != value.get('source_sha256')):
           raise ValueError('Historical report source changed')
-        stamp = source.get('completed_wall_ns')
+        stamp = source.get('last_intact_wall_ns') if partial else source.get('completed_wall_ns')
         if type(stamp) is int and stamp > 0:
           ordered.append((stamp, index, value))
       if ordered:
@@ -109,6 +110,10 @@ class StatusReport:
     details: dict[str, Any] = {'Analysis runs while parked': True, 'Next-drive trial is reversible': True, 'Physical road improvement proven': False}
     if value.get('skipped_routes'):
       details['Skipped recorded drives'] = [list(row) for row in value['skipped_routes'][:16]]
+    if value.get('partial_drive') is True:
+      details['Drive analysis is partial'] = True
+      details['Partial drive segments'] = value['partial_segments']
+      details['Omitted recorded segments'] = value['omitted_segments'][:16]
     for key, title in (('source_sha256', 'Original completed route hash'), ('assessment_sha256', 'Offroad assessment hash')):
       if key in value:
         details[title] = value[key]
@@ -159,6 +164,8 @@ class StatusReport:
         ][:16]
         details['Recorded suggestion count'] = len(recommendations)
         details['More recorded suggestions omitted'] = False
+        if 'recommendation_sources' in value:
+          details['Recorded suggestion sources'] = value['recommendation_sources']
     proposal = value.get('suggestion')
     if proposal is not None:
       details['Full surface coordinates'] = [[n, proposal['values'][n]] for n in NAMES]
@@ -281,6 +288,8 @@ def wait_for_parked(sm, params, *, stopped=lambda: False, clock=time.monotonic):
 
 def run_parked_analysis(worker, report):
   """Advance promptly only after an unreadable input was durably skipped."""
+  from openpilot.starpilot.flm.offroad_route import RouteInputError
+
   try:
     report.set(worker.run_once())
   except (ValueError, OSError, RuntimeError) as error:
@@ -301,7 +310,7 @@ def run_parked_analysis(worker, report):
   return False
 
 
-def main():
+def _run():
   from openpilot.common.hardware.hw import Paths
   from openpilot.starpilot.flm.offroad_cache import directory_for_params
   from openpilot.starpilot.flm.offroad_source import record_drive
@@ -313,8 +322,9 @@ def main():
     nonlocal stopped
     stopped = True
 
-  previous = signal.signal(signal.SIGTERM, stop)
+  previous = {sig: signal.signal(sig, stop) for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)}
   sm = None
+  restart = False
   report = StatusReport()
   try:
     sm = messaging.SubMaster(['deviceState', 'pandaStates', 'peripheralState'])
@@ -328,28 +338,13 @@ def main():
       return okay
 
     cache = directory_for_params(params)
-    worker = OffroadWorker(
-      params,
-      Paths.log_root(),
-      cache,
-      permitted=permitted,
-      on_analysis=lambda: report.analyzing({'status': 'fitting', 'reason': 'analyzing_last_completed_drive'}),
-      on_assessment=lambda a: report.analyzing(
-        {
-          'status': 'fitting',
-          'reason': 'checking_recorded_steering_recommendations',
-          'completed_route': a.receipt.route_id,
-          'vehicle': str(a.cp.carFingerprint),
-          'analysis_counts': dict(a.counts),
-          'recorded_tracking': a.recorded_tracking,
-        }
-      ),
-      on_recommendations=lambda value: report.analyzing({**value, 'reason': 'checking_recorded_steering_recommendations'}),
-    )
-    report.restore(worker.cache)
+    worker = None
     next_analysis = 0.0
     while not stopped:
       if not params.get_bool('IsOffroad'):
+        if worker is not None:
+          restart = True
+          break
         report.set({'enabled': True, 'status': 'collecting', 'reason': 'recording_for_offroad_analysis'})
         record_drive(
           params,
@@ -369,6 +364,28 @@ def main():
           ),
         )
       elif parked() and time.monotonic() >= next_analysis:
+        if worker is None:
+          from openpilot.starpilot.flm.offroad_worker import OffroadWorker
+
+          worker = OffroadWorker(
+            params,
+            Paths.log_root(),
+            cache,
+            permitted=permitted,
+            on_analysis=lambda: report.analyzing({'status': 'fitting', 'reason': 'analyzing_last_completed_drive'}),
+            on_assessment=lambda a: report.analyzing(
+              {
+                'status': 'fitting',
+                'reason': 'checking_recorded_steering_recommendations',
+                'completed_route': a.receipt.route_id,
+                'vehicle': str(a.cp.carFingerprint),
+                'analysis_counts': dict(a.counts),
+                'recorded_tracking': a.recorded_tracking,
+              }
+            ),
+            on_recommendations=lambda value: report.analyzing({**value, 'reason': 'checking_recorded_steering_recommendations'}),
+          )
+          report.restore(worker.cache)
         next_analysis = time.monotonic() + 10.0
         if run_parked_analysis(worker, report):
           next_analysis = time.monotonic()
@@ -376,14 +393,35 @@ def main():
       if not stopped:
         time.sleep(0.05)
   finally:
-    signal.signal(signal.SIGTERM, previous)
-    if sm is not None:
-      for sock in sm.sock.values():
-        close = getattr(sock, 'close', None)
-        if close is not None:
-          close()
+    try:
+      if sm is not None:
+        for sock in sm.sock.values():
+          close = getattr(sock, 'close', None)
+          if close is not None:
+            close()
+    finally:
+      for sig, handler in previous.items():
+        signal.signal(sig, handler)
+  return restart and not stopped
+
+
+_CLEAN_IMAGE = '--flm-clean-image'
+
+
+def _clean_image():
+  # Release both the manager's inherited heap and every parked allocation.
+  # Reuse its launcher to retain crash/logging setup and the tracked PID.
+  code = "from openpilot.system.manager.process import launcher; launcher('openpilot.starpilot.flm.offroad_daemon', 'steerlearnerd')"
+  os.execv(sys.executable, [sys.executable, '-c', code, _CLEAN_IMAGE])
+
+
+def main():
+  if sys.argv[-1:] != [_CLEAN_IMAGE]:
+    _clean_image()
+    return
+  if _run():
+    _clean_image()
 
 
 if __name__ == '__main__':
   main()
-

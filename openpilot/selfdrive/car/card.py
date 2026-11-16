@@ -33,7 +33,7 @@ from opendbc.car.hyundai.ioniq6_media import Ioniq6MediaButtons
 from opendbc.car.hyundai.values import CAR as HYUNDAI_CAR
 from opendbc.car.interfaces import CarInterfaceBase, RadarInterfaceBase
 from openpilot.selfdrive.pandad import can_capnp_to_list, can_list_to_can_capnp
-from openpilot.selfdrive.car.cruise import SlcWheelContext, VCruiseHelper
+from openpilot.selfdrive.car.cruise import SlcWheelContext, VCruiseHelper, slc_target_kph
 from openpilot.starpilot.speed_limits import physical_actions as slc_physical
 from openpilot.starpilot.aol.intent import AolProcessFaultContext, independent_axis_requested, read_settings
 from openpilot.starpilot.aol.transport_pause import TransportPauseFeedback, cp_identity
@@ -226,6 +226,8 @@ class Car:
     self.ioniq_media_map = IoniqMediaMapCache() if self.conditional_replay else None
     self.manual_settings_owner = ConditionalSettingsOwner(self.params) if self.conditional_replay else None
     self.ioniq6_long_prearmed = False
+    self.ioniq6_readiness_staged = False
+    self.ioniq6_previous_cp_saved = False
     self.ioniq6_long_pending = False
     self.ioniq6_long_selected = False
     self.ioniq6_last_preflight_at = 0.0
@@ -284,6 +286,12 @@ class Car:
                             any(ps.ignitionLine or ps.ignitionCan for ps in self.sm['pandaStates']))
           long_cp = build_ioniq6_hda2_long_candidate(cp, fingerprints) if eligible else None
           if long_cp is not None:
+            self.save_previous_car_params()
+            self.ioniq6_previous_cp_saved = True
+            self.ioniq6_readiness_staged = self.stage_ioniq6_startup_readiness(long_cp)
+            if not self.ioniq6_readiness_staged:
+              long_cp = None
+          if long_cp is not None:
             preflight = inspect_ioniq6_long_sources(self.can_callbacks[0], ecan_bus=HyundaiCanBus(cp).ECAN)
             cloudlog.event('ioniq6_long_preflight', reason=preflight.reason)
             if preflight.source_period is None or preflight.vehicle_ready is not False:
@@ -296,17 +304,23 @@ class Car:
             # Bit 11 is AOL only inside the exact Ioniq 6 bit-15 namespace.
             # This immutable choice precedes the ECU transaction and CP publish.
             long_cp.safetyConfigs[-1].safetyParam |= 0x0800
-          if long_cp is not None and not self.startup_diagnostic_admission(cp=long_cp):
+          if long_cp is not None and not self.startup_diagnostic_admission(cp=long_cp, readiness_staged=True):
             long_cp = None
+          if long_cp is None and self.ioniq6_readiness_staged:
+            self.params.put_bool('ControlsReady', False, block=True)
+            self.ioniq6_readiness_staged = False
           if long_cp is not None:
             self.ioniq6_restore_callbacks = self.can_callbacks
             self.ioniq6_restore_bus = HyundaiCanBus(long_cp).ECAN
           cp, self.ioniq6_long_prearmed, self.ioniq6_handoff_result = finalize_ioniq6_prepublication(
             cp, long_cp, *self.can_callbacks, enabled=eligible, is_release=is_release)
           self.ioniq6_long_selected = self.ioniq6_long_prearmed
+          if not self.ioniq6_long_prearmed and self.ioniq6_readiness_staged:
+            self.params.put_bool('ControlsReady', False, block=True)
+            self.ioniq6_readiness_staged = False
           if self.ioniq6_long_prearmed:
             self.ioniq6_handoff_source_floor_ns = time.clock_gettime_ns(time.CLOCK_BOOTTIME)
-            ecan_bus = self.ioniq6_restore_bus
+            ecan_bus = HyundaiCanBus(cp).ECAN
             self.ioniq6_keepalive = Ioniq6StartupKeepalive(
               self.can_callbacks[1], lambda: restore_ioniq6_adas(*self.can_callbacks, ecan_bus=ecan_bus),
               lambda: setattr(self, 'ioniq6_long_lost', True),
@@ -454,11 +468,8 @@ class Car:
     self.slc_match_on_engage = self.slc_transport_available and self.read_slc_match_on_engage()
     self.slc_source_floor_ns = 0
 
-    # Write previous route's CarParams
-    prev_cp = get_cache(self.params, "CarParamsPersistent")
-    if prev_cp is not None:
-      with car.CarParams.from_bytes(prev_cp) as previous:
-        put_cache(self.params, "CarParamsPrevRoute", previous, block=True)
+    if not self.ioniq6_previous_cp_saved:
+      self.save_previous_car_params()
 
     # Write CarParams for controls and radard
     self.vehicle_startup.seal_publication()
@@ -485,6 +496,8 @@ class Car:
     # card is driven by can recv, expected at 100Hz
     self.rk = Ratekeeper(100, print_delay_threshold=None)
     self.ioniq6_init_complete = True
+    if self.ioniq6_long_prearmed and self.ioniq6_readiness_staged:
+      self.ci_initialized = True
 
   def read_slc_configuration(self):
     settings = slc_runtime_settings(self.params, self.CP, os.environ)
@@ -604,6 +617,8 @@ class Car:
         not (CS.brakePressed or CS.gasPressed or CS.standstill or CS.cruiseState.standstill)):
       wheel_context = slc_physical.wheel_override_context(self.sm, now_ns, after_ns=floor_ns,
         selected_kph=cruise_helper.v_cruise_kph, is_metric=self.is_metric)
+    stop = slc_physical.accepted_target(self.sm, now_ns, after_ns=floor_ns) if self.slc_replay else None
+    cruise_helper.slc_stop_kph = slc_target_kph(stop, self.is_metric) if stop is not None else None
     self.update_cruise_speed(CS, pending, wheel_context=wheel_context)
     if self.controller_cruise_sock is not None:
       for _ in range(8):
@@ -646,7 +661,13 @@ class Car:
         ford_awaiting_initial_request(self.CP, CS, self.sm,
           current_native(self.sm, self.CP, now_ns=now_ns, axis_session_id=self.aol_axis_session()),
           self.aol_transport_feedback, self.aol_card_intent, now_ns=now_ns, producer=self.slc_producer_session))
-      transport_reset = not (hkg_cancel_retained or rivian_brake_retained or angle_arm_pending or ford_initial_wait) and self.aol_transport_feedback.observe(
+      from openpilot.starpilot.car.volkswagen.aol import awaiting_initial_request as volkswagen_initial_request
+      volkswagen_initial_wait = volkswagen_initial_request(self.CP, CS, self.sm,
+        current_native(self.sm, self.CP, now_ns=now_ns, axis_session_id=self.aol_axis_session()),
+        self.aol_transport_feedback, self.aol_card_intent, now_ns=now_ns,
+        producer=getattr(self, 'slc_producer_session', ''))
+      transport_reset = not (hkg_cancel_retained or rivian_brake_retained or angle_arm_pending or
+        ford_initial_wait or volkswagen_initial_wait) and self.aol_transport_feedback.observe(
         self.sm, self.CP, CS, now_ns,
         latched=self.aol_card_intent.allowed_latch, cancel_source_ns=cancel_source_ns,
         brake_source_ns=brake_source_ns,
@@ -656,7 +677,10 @@ class Car:
           getattr(self.aol_card_intent, 'physical_arm_ns', 0)),
         startup_calibration_pending=getattr(self.aol_card_intent, 'startup_calibration_pending', False),
         intent_paused=(getattr(self.aol_card_intent, 'pause_lateral', False) or
-          ford_brake_pause_active(self.CP, CS, self.aol_settings)))
+          ford_brake_pause_active(self.CP, CS, self.aol_settings) or
+          self.CP.brand == 'volkswagen' and CS.canValid and not CS.canTimeout and
+          not CS.steerFaultPermanent and (CS.gearShifter == car.CarState.GearShifter.reverse or
+          getattr(self.aol_card_intent, 'reverse_pause', False))))
       fault_active = True if transport_reset else None
       event_ns = int(self.sm.logMonoTime['onroadEvents'])
       if (getattr(self.aol_card_intent, 'requires_fault_observation', self.aol_card_intent.explicit_latch) and
@@ -674,7 +698,7 @@ class Car:
           not feedback.retention_started_ns and not feedback.retention_qualified and not feedback.retention_pending and
           not any(e.immediateDisable or e.softDisable or e.userDisable for e in self.sm['onroadEvents']))
         fault_active = transport_reset or self.aol_disarming_fault(CS, event_ns, now_ns,
-          transport_observed_healthy=reuse_transport or angle_arm_pending or ford_initial_wait)
+          transport_observed_healthy=reuse_transport or angle_arm_pending or ford_initial_wait or volkswagen_initial_wait)
       angle_aol, ford_aol, honda_aol, mazda_aol, preap_aol, volkswagen_aol = self.aol_permission_owners()
       nissan_aol = qualified_nissan_aol(self.CP, marked_only=True)
       rivian_aol = qualified_rivian_aol(self.CP, marked_only=True)
@@ -730,7 +754,10 @@ class Car:
         self._angle_aol_acknowledged_arm_ns = self.aol_card_intent.physical_arm_ns
       subaru_braked_main_pending = bool(self.CP.brand == 'subaru' and not transport_reset and native is not None and
         getattr(self.aol_transport_feedback, 'subaru_main_retained_native_ns', 0) == int(native.observedMonoTime))
+      volkswagen_reverse_pending = bool(volkswagen_aol and not transport_reset and native is not None and
+        getattr(self.aol_transport_feedback, 'volkswagen_reverse_retained_native_ns', 0) == int(native.observedMonoTime))
       rejected = native_reset or (not angle_arm_pending and not subaru_braked_main_pending and
+        not volkswagen_initial_wait and not volkswagen_reverse_pending and
         native_latch_rejected(self.CP, native, state=CS if angle_panda_ready else None))
       rejection_ns = now_ns if native_reset else int(native.observedMonoTime) if rejected else 0
       observe_physical = getattr(self.aol_card_intent, 'observe_physical_samples', None)
@@ -962,7 +989,10 @@ class Car:
           getattr(self.aol_card_intent, 'physical_arm_ns', 0)),
         startup_calibration_pending=getattr(self.aol_card_intent, 'startup_calibration_pending', False),
         intent_paused=(getattr(self.aol_card_intent, 'pause_lateral', False) or
-          ford_brake_pause_active(self.CP, CS, self.aol_settings))):
+          ford_brake_pause_active(self.CP, CS, self.aol_settings) or
+          self.CP.brand == 'volkswagen' and CS.canValid and not CS.canTimeout and
+          not CS.steerFaultPermanent and (CS.gearShifter == car.CarState.GearShifter.reverse or
+          getattr(self.aol_card_intent, 'reverse_pause', False)))):
       return True
     events = self.sm['onroadEvents']
     if self.aol_transport_feedback.retention_qualified or self.aol_transport_feedback.retention_pending:
@@ -1406,7 +1436,23 @@ class Car:
                        panda_recv_ns=panda_receipt + boot_ns - mono_ns if panda_current else 0,
                        panda_current=panda_current)
 
-  def startup_diagnostic_admission(self, *, cp=None):
+  def save_previous_car_params(self):
+    prev_cp = get_cache(self.params, "CarParamsPersistent")
+    if prev_cp is not None:
+      with car.CarParams.from_bytes(prev_cp) as previous:
+        put_cache(self.params, "CarParamsPrevRoute", previous, block=True)
+
+  def stage_ioniq6_startup_readiness(self, cp):
+    if (self.params.get_bool('FirmwareQueryDone') or self.params.get('CarParams') or
+        not self.startup_diagnostic_admission(cp=cp)):
+      return False
+    self.params.put_bool('ControlsReady', True, block=True)
+    if not self.startup_diagnostic_admission(cp=cp, readiness_staged=True):
+      self.params.put_bool('ControlsReady', False, block=True)
+      return False
+    return True
+
+  def startup_diagnostic_admission(self, *, cp=None, readiness_staged=False):
     from openpilot.starpilot.aol.panda_faults import blocking_fault_list
     self.sm.update(0)
     now, boot = time.monotonic_ns(), time.clock_gettime_ns(time.CLOCK_BOOTTIME)
@@ -1427,7 +1473,8 @@ class Car:
       # pandad clears the internal DOS ignition line in this exact topology.
       # The external captured-ADRV owner must still observe vehicle ignition.
       ignition_pandas = (pandas[1],)
-    return bool(not self.params.get_bool('IsOffroad') and not self.params.get_bool('ControlsReady') and
+    return bool(not self.params.get_bool('IsOffroad') and self.params.get_bool('ControlsReady') == readiness_staged and
+                (not readiness_staged or (not self.params.get_bool('FirmwareQueryDone') and not self.params.get('CarParams'))) and
                 sm.seen['pandaStates'] and sm.valid['pandaStates'] and sm.alive['pandaStates'] and
                 0 < stamp <= boot and boot - stamp <= 300_000_000 and
                 0 < receipt <= now and now - receipt <= 300_000_000 and len(pandas) == count and

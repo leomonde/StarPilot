@@ -16,6 +16,7 @@ from opendbc.car.ford.discovery import (normal_bus0_selection as ford_normal_bus
 from opendbc.car.volvo.discovery import normal_bus_topology as volvo_normal_bus_topology, v60_bus_topology as volvo_v60_bus_topology
 from opendbc.car.hyundai.discovery import normal_bus_topology
 from opendbc.car.honda.discovery import normal_bus_topology as honda_normal_bus_topology
+from opendbc.car.chrysler.discovery import normal_bus_topology as chrysler_normal_bus_topology
 from opendbc.car.tesla.discovery import normal_bus0_topology as tesla_normal_bus0_topology
 from opendbc.car.values import BRANDS
 from opendbc.car.vin import get_vin, is_valid_vin, VIN_UNKNOWN
@@ -187,13 +188,14 @@ def fingerprint(can_recv: CanRecvCallable, can_send: CanSendCallable, set_obd_mu
           gm_probe=gm_normal_bus0_topology if _gm_fw_uses_normal_bus0() else None,
           volvo_probe=volvo_probe,
           tesla_probe=tesla_normal_bus0_topology if _tesla_fw_uses_normal_bus0() else None) or
-          ('honda' if honda_normal_bus_topology(normal_bus_packets) else None)) is not None:
+          ('honda' if honda_normal_bus_topology(normal_bus_packets) else None) or
+          ('chrysler' if chrysler_normal_bus_topology(normal_bus_packets) else None)) is not None:
 
         set_obd_multiplexing(False)
         warmup_remaining = 0.1 - (time.monotonic() - start_time)
         if warmup_remaining > 0:
           time.sleep(warmup_remaining)
-        vin_buses = (0,) if normal_brand in ('ford', 'gm', 'volvo', 'tesla') else (0, 1)
+        vin_buses = (0,) if normal_brand in ('ford', 'gm', 'volvo', 'tesla', 'chrysler') else (0, 1)
         vin_rx_addr, vin_rx_bus, vin = get_vin(can_recv, can_send, vin_buses)
         # Polestar is identified by live CAN alone; the V60 by its engine FW, which answers on bus 0
         car_fw = [] if normal_brand == 'volvo' and not volvo_v60 else get_fw_versions(can_recv, can_send, set_obd_multiplexing,

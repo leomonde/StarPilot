@@ -7,7 +7,7 @@ import pytest
 from openpilot.starpilot.ui.large_speed_geometry import LARGE_SIGN_SCALE, SIGN_WIDTH, SIGN_HEIGHT
 from openpilot.starpilot.ui.onroad_state import speed_limit_bounds, slc_controls, SpeedLimitObservation, ObservationKind
 from openpilot.starpilot.ui.presentation import Profile
-from openpilot.starpilot.ui.speed_limit_widget import SpeedLimitWidget
+from openpilot.starpilot.ui.speed_limit_widget import LABEL_SCALE, SpeedLimitWidget
 from openpilot.starpilot.ui.tests.test_unified_speed_native import foreground_calls, fonts, state as pending_state
 from openpilot.starpilot.ui.unified_speed_presentation import resolve_unified_speed
 
@@ -47,8 +47,14 @@ def test_sign_layout_and_tap_area_stay_fixed_with_or_without_offset(profile, off
     historical_outline.assert_not_called()
     widget.shapes.outline.assert_called_once()
     sign_scale = (160 if offset else 150) / SIGN_HEIGHT
-    assert widget.shapes.outline.call_args.args[:2] == (bounds[0]+12+SIGN_WIDTH/2*scale,
-                                                     bounds[1]+12+(SIGN_HEIGHT*sign_scale/2-9)*scale)
+    if profile == Profile.LARGE:
+      # The number sits on SET's shared row; without an offset the outline centers on the heading and number.
+      from openpilot.starpilot.ui.onroad_state import SIGN_PADDING
+      from openpilot.starpilot.ui.speed_limit_widget import SHARED_NUMBER_ROW
+      center = bounds[1]+SIGN_PADDING[profile][0]+(SHARED_NUMBER_ROW-76+(SIGN_HEIGHT*sign_scale/2-9 if offset else 54.5))*scale
+    else:
+      center = bounds[1]+12+(SIGN_HEIGHT*sign_scale/2-9)*scale
+    assert widget.shapes.outline.call_args.args[:2] == pytest.approx((bounds[0]+12+SIGN_WIDTH/2*scale, center))
     assert widget.shapes.outline.call_args.kwargs == {'scale': scale * sign_scale, 'width_scale': .9}
   assert ('+5' in [call.args[0] for call in foreground_calls(widget.fonts.draw)]) == offset
 
@@ -125,7 +131,7 @@ def test_only_the_displayed_ranges_configured_offset_expands_the_sign(profile, m
     offset_mps=target - posted_mps, presentation_adjusted_limit_mps=target, accepted_speed_limit_mps=15.))
   shown = resolve_unified_speed(current)
   assert shown.offset_configured == (configured_offset != 0)
-  assert shown.limit_text == str(round(target * factor))
+  assert int(shown.posted_text) + int(shown.offset_text or 0) == round(target * factor)
   if configured_offset == 0 and posted_mps in (1 / 3.6, 160 / 3.6):
     assert shown.offset_text is not None  # The effective adjustment is clamping, not a configured offset.
   widget = SpeedLimitWidget(fonts(profile), profile)
@@ -168,10 +174,11 @@ def test_mutcd_preserves_text_sizes_and_fits_both_sizes_with_real_fonts(profile)
           text, role, size, x, y, _ = call.args
           left, right = font.horizontal_ink(text, role, size)
           top, bottom = font.vertical_ink(text, role, size)
-          if text.startswith('LAST '):
-            assert right - left == pytest.approx(108 * widget.scale)
-          else:
-            assert size == pytest.approx({FontRole.SEMI_BOLD: 26, FontRole.SET_SPEED: 70, FontRole.MEDIUM: 27}[role] * widget.text_scale)
+          nominal = {FontRole.SEMI_BOLD: 26, FontRole.SET_SPEED: 70, FontRole.MEDIUM: 27}[role] * widget.text_scale
+          if role == FontRole.SET_SPEED:
+            assert size == pytest.approx(nominal)
+          else:  # Large labels are larger, shrinking only to fit the sign.
+            assert nominal - 1e-6 <= size <= nominal * LABEL_SCALE[profile] + 1e-6
           boxes.append((x + left, y + top, x + right, y + bottom))
         assert cx - half_width + 1 <= min(box[0] for box in boxes)
         assert max(box[2] for box in boxes) <= cx + half_width - 1

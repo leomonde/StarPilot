@@ -21,11 +21,12 @@ class TestFirstStartMigration(unittest.TestCase):
     self.namespace = self.root / 'params' / 'd'
     self.namespace.mkdir(parents=True)
     self.storage = self.root / 'recovery'
-    self.types = {'IsMetric': 'BOOL', 'ForceStops': 'BOOL', 'OpenpilotEnabledToggle': 'BOOL', 'SteerFriction': 'FLOAT',
+    self.types = {'IsRhdDetected': 'BOOL', 'LanguageSetting': 'STRING', 'AlphaLongitudinalEnabled': 'BOOL', 'IsMetric': 'BOOL',
+                  'ForceStops': 'BOOL', 'OpenpilotEnabledToggle': 'BOOL', 'SteerFriction': 'FLOAT',
                   'CalibrationParams': 'BYTES', 'CarParamsCache': 'BYTES', 'CarParamsPersistent': 'BYTES', 'CarParamsPrevRoute': 'BYTES',
                   'LiveParametersV2': 'BYTES', 'LiveDelay': 'BYTES',
                   'LiveTorqueParameters': 'BYTES', 'SecOCKey': 'BYTES', 'DongleId': 'STRING',
-                  'BluetoothEnabled': 'BOOL', 'GsmMetered': 'BOOL', 'HasAcceptedTerms': 'STRING'}
+                  'BluetoothEnabled': 'BOOL', 'GsmMetered': 'BOOL', 'HasAcceptedTerms': 'STRING', 'CompletedTrainingVersion': 'STRING'}
     self.params = SimpleNamespace(get_param_path=lambda: str(self.namespace), all_keys=lambda: list(self.types),
                                   get_type=lambda key: SimpleNamespace(name=self.types[key]))
     self.cache = SimpleNamespace(CACHE_KEYS={'CalibrationParams', 'CarParamsCache', 'CarParamsPersistent', 'CarParamsPrevRoute',
@@ -63,6 +64,150 @@ class TestFirstStartMigration(unittest.TestCase):
     before = {str(path): path.read_bytes() for path in self.storage.rglob('*') if path.is_file()}
     self.start()
     self.assertEqual({str(path): path.read_bytes() for path in self.storage.rglob('*') if path.is_file()}, before)
+
+  def test_vehicle_preferences_keep_canonical_choices_and_new_settings_survive_restart(self):
+    self.types.update(dict.fromkeys(migration.VEHICLE_PREFERENCE_KEYS, 'BOOL'))
+    original = {key: b'1' if index % 2 else b'0' for index, key in enumerate(sorted(migration.VEHICLE_PREFERENCE_KEYS))}
+    original.update({'AlphaLongitudinalEnabled': b'1', 'CarParamsCache': b'old fingerprint',
+                     'CarParamsPersistent': b'old safety configuration', 'CarParamsPrevRoute': b'old route', 'SteerFriction': b'0.337'})
+    self.write(original)
+    self.start()
+    expected = {key: raw for key, raw in original.items() if key in migration.OPERATIONAL_KEYS}
+    self.assertEqual(self.values(), expected)
+    self.assertEqual(migration.load_snapshot(next((self.storage / 'snapshots').iterdir())), original)
+    for key in migration.VEHICLE_PREFERENCE_KEYS:
+      (self.namespace / key).write_bytes(b'0' if expected[key] == b'1' else b'1')
+    changed = self.values()
+    self.start()
+    self.assertEqual(self.values(), changed)
+
+  def test_invalid_vehicle_preferences_are_archived_without_enabling_them(self):
+    self.types.update(dict.fromkeys(migration.VEHICLE_PREFERENCE_KEYS, 'BOOL'))
+    original = dict.fromkeys(migration.VEHICLE_PREFERENCE_KEYS, b'true')
+    self.write(original)
+    self.start()
+    self.assertEqual(self.values(), {})
+    self.assertEqual(migration.load_snapshot(next((self.storage / 'snapshots').iterdir())), original)
+
+  def test_vehicle_preference_keys_are_registered_booleans(self):
+    from openpilot.common.params import Params
+    params = Params(str(self.root / 'native-params'))
+    for key in migration.VEHICLE_PREFERENCE_KEYS:
+      self.assertEqual(params.get_type(key).name, 'BOOL', key)
+
+  def test_regional_choices_survive_migration_and_later_changes(self):
+    original = {'IsMetric': b'1', 'IsRhdDetected': b'1', 'LanguageSetting': b'main_ko',
+                'SteerFriction': b'0.337', 'CarParamsPersistent': b'old fingerprint'}
+    self.write(original)
+    self.start()
+    self.assertEqual(self.values(), {key: original[key] for key in ('IsMetric', 'IsRhdDetected', 'LanguageSetting')})
+    self.assertEqual(migration.load_snapshot(next((self.storage / 'snapshots').iterdir())), original)
+    self.write({'IsMetric': b'0', 'IsRhdDetected': b'0', 'LanguageSetting': b'fr'})
+    changed = self.values()
+    self.start()
+    self.assertEqual(self.values(), changed)
+
+  def test_every_supported_current_and_legacy_language_is_retained(self):
+    catalog = json.loads((SOURCE.parents[1] / 'selfdrive/ui/translations/languages.json').read_text())
+    for code in catalog.values():
+      for prefix in ('', 'main_'):
+        with self.subTest(language=prefix + code), tempfile.TemporaryDirectory() as directory:
+          namespace = Path(directory) / 'params' / 'd'
+          namespace.mkdir(parents=True)
+          params = SimpleNamespace(get_param_path=lambda namespace=namespace: str(namespace), all_keys=self.params.all_keys, get_type=self.params.get_type)
+          raw = (prefix + code).encode()
+          (namespace / 'LanguageSetting').write_bytes(raw)
+          migration.prepare_manager_start(params, Path(directory) / 'state', auto_migrate=True)
+          self.assertEqual((namespace / 'LanguageSetting').read_bytes(), raw)
+
+  def test_invalid_regional_values_are_archived(self):
+    for language in (b'', b'\xff', b'unknown', b'main_', b'e' * 33):
+      with self.subTest(language=language), tempfile.TemporaryDirectory() as directory:
+        namespace = Path(directory) / 'params' / 'd'
+        namespace.mkdir(parents=True)
+        params = SimpleNamespace(get_param_path=lambda namespace=namespace: str(namespace), all_keys=self.params.all_keys, get_type=self.params.get_type)
+        original = {'IsMetric': b'true', 'IsRhdDetected': b'2', 'LanguageSetting': language}
+        for key, raw in original.items():
+          (namespace / key).write_bytes(raw)
+        storage = Path(directory) / 'state'
+        migration.prepare_manager_start(params, storage, auto_migrate=True)
+        self.assertEqual(migration._read_namespace(namespace), {})
+        self.assertEqual(migration.load_snapshot(next((storage / 'snapshots').iterdir())), original)
+
+  def test_legacy_explicit_wheel_side_wins_only_with_valid_override(self):
+    for override in (b'0', b'1', b'true'):
+      for side in (b'0', b'1', b'invalid'):
+        with self.subTest(override=override, side=side), tempfile.TemporaryDirectory() as directory:
+          namespace = Path(directory) / 'params' / 'd'
+          namespace.mkdir(parents=True)
+          params = SimpleNamespace(get_param_path=lambda namespace=namespace: str(namespace), all_keys=self.params.all_keys, get_type=self.params.get_type)
+          original = {'IsRhdDetected': b'1', 'IsRHDOverride': override, 'IsRHD': side}
+          for key, raw in original.items():
+            (namespace / key).write_bytes(raw)
+          migration.prepare_manager_start(params, Path(directory) / 'state', auto_migrate=True)
+          expected = side if override == b'1' and side in (b'0', b'1') else b'1'
+          self.assertEqual(migration._read_namespace(namespace), {'IsRhdDetected': expected})
+
+  def test_regional_defaults_are_not_invented_for_a_fresh_install(self):
+    self.start()
+    self.assertEqual(self.values(), {})
+
+  def test_onboarding_keeps_only_previously_saved_acceptance(self):
+    self.write({'HasAcceptedTerms': b'2', 'CompletedTrainingVersion': b'0.2.0', 'ForceStops': b'1'})
+    self.start()
+    self.assertEqual(self.values(), {'HasAcceptedTerms': b'2', 'CompletedTrainingVersion': b'0.2.0'})
+    self.start()
+    self.assertEqual(self.values(), {'HasAcceptedTerms': b'2', 'CompletedTrainingVersion': b'0.2.0'})
+
+  def test_fresh_install_does_not_fabricate_onboarding_acceptance(self):
+    self.start()
+    self.assertNotIn('HasAcceptedTerms', self.values())
+    self.assertNotIn('CompletedTrainingVersion', self.values())
+
+  def test_security_key_library_survives_preference_reset_and_restart(self):
+    self.types['SecOCKeys'] = 'STRING'
+    library = b'[{"name":"family car","value":"abababababababababababababababab"}]'
+    original = {'SecOCKey': b'ab' * 16, 'SecOCKeys': library, 'SteerFriction': b'0.2'}
+    self.write(original)
+    self.start()
+    self.assertEqual(self.values(), {'SecOCKey': original['SecOCKey'], 'SecOCKeys': library})
+    self.assertEqual(migration.load_snapshot(next((self.storage / 'snapshots').iterdir())), original)
+    self.start()
+    self.assertEqual(self.values()['SecOCKeys'], library)
+
+  def test_alpha_longitudinal_preserves_both_values_and_later_changes(self):
+    for value in (b'0', b'1'):
+      with self.subTest(value=value), tempfile.TemporaryDirectory() as directory:
+        namespace = Path(directory) / 'params' / 'd'
+        namespace.mkdir(parents=True)
+        storage = Path(directory) / 'recovery'
+        params = SimpleNamespace(get_param_path=lambda namespace=namespace: str(namespace), all_keys=self.params.all_keys, get_type=self.params.get_type)
+        (namespace / 'AlphaLongitudinalEnabled').write_bytes(value)
+        migration.prepare_manager_start(params, storage, auto_migrate=True)
+        self.assertEqual((namespace / 'AlphaLongitudinalEnabled').read_bytes(), value)
+        changed = b'1' if value == b'0' else b'0'
+        (namespace / 'AlphaLongitudinalEnabled').write_bytes(changed)
+        migration.prepare_manager_start(params, storage, auto_migrate=True)
+        self.assertEqual((namespace / 'AlphaLongitudinalEnabled').read_bytes(), changed)
+
+  def test_legacy_longitudinal_choice_requires_canonical_value_and_never_overrides_alpha(self):
+    for legacy in (b'0', b'1', b'true', b'', b'2'):
+      for alpha in (None, b'0', b'1', b'invalid'):
+        with self.subTest(legacy=legacy, alpha=alpha), tempfile.TemporaryDirectory() as directory:
+          namespace = Path(directory) / 'params' / 'd'
+          namespace.mkdir(parents=True)
+          storage = Path(directory) / 'recovery'
+          params = SimpleNamespace(get_param_path=lambda namespace=namespace: str(namespace), all_keys=self.params.all_keys, get_type=self.params.get_type)
+          (namespace / 'ExperimentalLongitudinalEnabled').write_bytes(legacy)
+          if alpha is not None:
+            (namespace / 'AlphaLongitudinalEnabled').write_bytes(alpha)
+          original = migration._read_namespace(namespace)
+          migration.prepare_manager_start(params, storage, auto_migrate=True)
+          expected = alpha if alpha in (b'0', b'1') else legacy if alpha is None and legacy in (b'0', b'1') else None
+          path = namespace / 'AlphaLongitudinalEnabled'
+          self.assertEqual(path.read_bytes() if path.exists() else None, expected)
+          self.assertFalse((namespace / 'ExperimentalLongitudinalEnabled').exists())
+          self.assertIn(original, [migration.load_snapshot(path) for path in (storage / 'snapshots').iterdir()])
 
   def test_invalid_operational_bool_archived_all_old_preferences_removed(self):
     original = {'IsMetric': b'True', 'ForceStops': b'1', 'OpenpilotEnabledToggle': b'true',

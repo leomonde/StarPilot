@@ -91,6 +91,28 @@ assert.equal(priorFindings.savedValues, null)
 assert.equal(priorFindings.evidenceDrives, 2)
 assert.match(offroadCoordinateEvidence(earlierDrive, 'highway_center_taper_max'), /Earlier analyzed drive.*not saved/)
 assert.equal(offroadView(completed).earlierDrive, false, 'Old reports remain readable without inventing history')
+const recent = structuredClone(completed)
+recent.current.details['Recorded coordinate recommendations'] = [
+  ['turn_in_boost_right', 0, .005, 10, 'partial_drive_provisional_only'],
+  ['unwind_taper_left', 0, .005, 8, 'recorded_candidate_requires_automatic_checks'],
+]
+recent.current.details['Recorded suggestion sources'] = [['turn_in_boost_right', 'earlier-partial-drive'], ['unwind_taper_left', 'earlier-full-drive']]
+recent.current.details['Saved route configuration state'] = 'rolled_back'
+assert(validTrainingResults(recent))
+assert.equal(offroadView(recent).configurationState, 'rolled_back')
+assert.deepEqual(offroadView(recent).suggestions.map(r => [r.sourceRoute, r.earlierDrive]),
+  [['earlier-partial-drive', true], ['earlier-full-drive', true]])
+assert.equal(offroadView(recent).partial, false, 'A partial historical finding must not relabel the latest completed drive')
+const allSources = structuredClone(recent)
+allSources.current.details['Recorded coordinate recommendations'] = [...SURFACE_NAMES, ...FRICTION_NAMES].map(name => [name, 0, .005, 6, 'unconfirmed'])
+allSources.current.details['Recorded suggestion sources'] = [...SURFACE_NAMES, ...FRICTION_NAMES].map(name => [name, 'earlier-full-drive'])
+assert(validTrainingResults(allSources), 'All 35 source-bound coordinates fit the report contract')
+assert.equal(offroadView(allSources).suggestions.length, 35)
+for (const sources of [[['unknown', 'route']], [['turn_in_boost_right', '']],
+  [['turn_in_boost_right', 'route'], ['turn_in_boost_right', 'copy']], [['ff_gain_left', 'unmatched-finding']]]) {
+  const bad = structuredClone(recent); bad.current.details['Recorded suggestion sources'] = sources
+  assert.equal(offroadView(bad), null)
+}
 for (const mutate of [d => d['Latest completed recording reviewed'] = 7,
   d => d['Latest completed recording reviewed'] = 'declared-drive',
   d => d['Findings retained from earlier drive'] = 'different-source']) {
@@ -101,9 +123,29 @@ configured.current.details['Saved route configuration state'] = 'ready_for_next_
 assert.equal(tunerStatus(configured, true, true).title, 'Tune saved for the next drive')
 assert.equal(configured.current.application.applied, false, 'Saving is not current application')
 assert.notEqual(tunerStatus(configured, false, true).title, 'Tune saved for the next drive', 'Old reports cannot assert current saved state')
+const retained = structuredClone(configured)
+retained.current.details['Saved route configuration state'] = 'retained_after_drive'
+retained.current.details['Analysis decision'] = 'independent_actual_tracking_stable'
+assert.equal(offroadView(retained).configurationState, 'retained_after_drive')
+assert.equal(tunerStatus(retained, true, true).title, 'Completed drive analyzed')
+assert.match(tunerStatus(retained, true, true).description, /adjustments are kept/)
+assert.doesNotMatch(tunerStatus(retained, true, true).description, /improv|proven|uncertain/i)
+assert.equal(retained.current.application.applied, false, 'Retained disk values do not establish current application')
 const fitting = structuredClone(completed)
 fitting.current.status = 'fitting'; fitting.current.reason = 'analyzing_last_completed_drive'
-assert.equal(tunerStatus(fitting, true, true).title, 'Analyzing your completed drive')
+assert.equal(tunerStatus(fitting, true, true).title, 'Analyzing your drive')
+const partial = structuredClone(completed)
+Object.assign(partial.current.details, {
+  'Drive analysis is partial': true, 'Partial drive segments': [9, 10], 'Analysis decision': 'partial_drive_provisional_only',
+})
+assert(validTrainingResults(partial))
+assert.equal(offroadView(partial).partial, true)
+assert.deepEqual(offroadView(partial).partialSegments, [9, 10])
+assert.equal(tunerStatus(partial, true, true).key, 'partial')
+for (const coverage of [[0, 10], [10, 10], [11, 10], [9, 181], [9.5, 10], [true, 10]]) {
+  const bad = structuredClone(partial); bad.current.details['Partial drive segments'] = coverage
+  assert.equal(offroadView(bad), null, 'Partial coverage cannot imply a complete drive or invent section counts')
+}
 const disabled = structuredClone(completed); disabled.preference.enabled = false
 assert.equal(tunerStatus(disabled, true, true).title, 'Auto Learn is off')
 for (const mutate of [v => v.current.details['Recorded route suggestions'][0][1] = .251,

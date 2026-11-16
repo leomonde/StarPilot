@@ -77,6 +77,8 @@ class Controls:
     from openpilot.starpilot.car.subaru.smoothing import read_frozen
 
     self.subaru_smoothing = read_frozen(self.CP, self.params)
+    from openpilot.starpilot.car.volkswagen.model_smoothing import ControlSmoothing
+    self.volkswagen_smoothing = ControlSmoothing(self.CP)
 
     self.CI = interfaces[self.CP.carFingerprint](self.CP)
     self.hyundai_lateral_fault = LateralFaultLatch(self.CP.carFingerprint)
@@ -152,7 +154,8 @@ class Controls:
     )
     if isinstance(self.LaC, LatControlTorque):
       # Only the actual startup owner reads configuration; replay clones stay pure.
-      if manual_effects is not None and manual_effects.profile.context[1] != str(self.LaC.controller_mode):
+      if manual_effects is not None and (manual_effects.profile.context[1] != str(self.LaC.controller_mode) or
+                                         not manual_effects.compatible(self.CP, self.CI, self.LaC, self.params)):
         manual_effects, manual_status = None, 'context_changed'
       self.LaC.manual_flm_effects, self.LaC.manual_flm_status = manual_effects, manual_status
       self.lateral_gain_owner = create_gain_owner(self.params, self.CP, self.LaC)
@@ -588,6 +591,8 @@ class Controls:
     from openpilot.starpilot.car.subaru.smoothing import seconds as subaru_smooth_seconds, control_maximum
 
     lat_delay = self.sm["lateralDelay"].lateralDelay + LAT_SMOOTH_SECONDS + subaru_smooth_seconds(CS.vEgo, control_maximum(self))
+    if getattr(self, "volkswagen_smoothing", None) is not None:
+      lat_delay += self.volkswagen_smoothing.seconds(int(self.sm.logMonoTime["modelV2"]), time.monotonic_ns())
 
     actuators.curvature = self.desired_curvature
     if cycle_timing is not None:

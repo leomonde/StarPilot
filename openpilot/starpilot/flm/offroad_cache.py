@@ -7,7 +7,7 @@ from pathlib import Path
 import stat
 import tempfile
 
-MAX_DOCUMENT = 1024 * 1024
+MAX_DOCUMENT = 4 * 1024 * 1024
 MAX_FILES = 128
 MAX_TOTAL = 64 * 1024 * 1024
 MAX_CHECKPOINTS = 8
@@ -260,4 +260,19 @@ class AssessmentCache:
     rows = [row for row in self.checkpoints() if row['input_fingerprint'] != value['input_fingerprint']] + [value]
     self._write('inputs.json', json.dumps(rows[-MAX_CHECKPOINTS:], sort_keys=True, separators=(',', ':'), allow_nan=False).encode())
     self._write('latest.json', raw)
+
+
+def trial_origin(cache, digest):
+  for _ in range(8):
+    value = cache.get(digest)
+    if value.get('kind') == 'next_drive_trial':
+      return digest, value
+    if value.get('kind') != 'next_drive_outcome':
+      break
+    digest = value['trial_analysis_sha256']
+  raise ValueError('Bounded original next-drive trial lineage required')
+
+
+def trial_document(cache, digest):
+  return trial_origin(cache, digest)[1]
 

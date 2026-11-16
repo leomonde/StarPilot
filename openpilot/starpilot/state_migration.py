@@ -23,11 +23,24 @@ RENAMED_BOOL_KEYS = {'AndroidAutoEnabled': 'StarPortEnabled'}
 MAX_VALUE_BYTES = 32 * 1024 * 1024
 MAX_SNAPSHOT_BYTES = 256 * 1024 * 1024
 MAX_KEYS = 4096
+VEHICLE_PREFERENCE_KEYS = frozenset({
+  'RemoteStartBootsComma', 'HKGRemoteStartBootsComma', 'IgnoreIgnitionLine',
+  'TeslaWakeOnCAN', 'DisableOpenpilotLongitudinal', 'LongPitch',
+  'VoltSNG', 'SNGHack', 'GMAutoHold',
+  'VoltOnePedalMode', 'TeslaCoopSteering', 'TeslaAOLScreenTap',
+  'TeslaAOLDisengageOnBrake', 'SubaruAvhStartup', 'SubaruStopStartOff',
+  'SubaruSNG', 'SubaruRedneckCruise', 'ToyotaAutoHold',
+  'JeepBrakeHold', 'DriveModeProfiles', 'DriveModeAcceleration',
+  'DriveModeDeceleration', 'NostalgiaMode', 'RemapCancelToDistance',
+  'FordHandsFreeCluster',
+})
 OPERATIONAL_KEYS = frozenset({
   'DongleId', 'HardwareSerial', 'GithubSshKeys', 'GithubUsername', 'SshEnabled',
+  'AlphaLongitudinalEnabled', 'HasAcceptedTerms', 'CompletedTrainingVersion',
+  'IsMetric', 'IsRhdDetected', 'LanguageSetting',
   'CellularDisabled', 'GsmApn', 'GsmMetered', 'GsmRoaming', 'NetworkMetered', 'BluetoothEnabled',
-  'ConnectProvider', 'PairingProvider', 'PairingEmail', 'PrimeType', 'AssistNowToken', 'SecOCKey',
-})
+  'ConnectProvider', 'PairingProvider', 'PairingEmail', 'PrimeType', 'AssistNowToken', 'SecOCKey', 'SecOCKeys',
+}) | VEHICLE_PREFERENCE_KEYS
 
 
 class MigrationRequired(RuntimeError):
@@ -301,6 +314,10 @@ def _migrate_first_start(params, namespace, storage, values, known, cache_keys, 
     raise MigrationRequired('Raw recovery snapshot readback failed')
   prepared = dict(values)
   actions = {}
+  if (retire_keys is None and 'AlphaLongitudinalEnabled' in known and 'AlphaLongitudinalEnabled' not in values and
+      values.get('ExperimentalLongitudinalEnabled') in (b'0', b'1')):
+    prepared['AlphaLongitudinalEnabled'] = values['ExperimentalLongitudinalEnabled']
+    actions['AlphaLongitudinalEnabled'] = 'preserve legacy longitudinal choice'
   for key, raw in values.items():
     if retire_keys is not None:
       if key in retire_keys:
@@ -314,6 +331,21 @@ def _migrate_first_start(params, namespace, storage, values, known, cache_keys, 
     elif getattr(params.get_type(key), 'name', None) == 'BOOL' and raw not in (b'0', b'1'):
       prepared.pop(key)
       actions[key] = 'archive invalid operational flag; initialize registry default'
+  if retire_keys is None:
+    language = prepared.get('LanguageSetting')
+    if language is not None:
+      languages = json.loads((Path(__file__).resolve().parents[1] / 'selfdrive/ui/translations/languages.json').read_text())
+      try:
+        code = language.decode('utf-8').removeprefix('main_')
+      except UnicodeDecodeError:
+        code = None
+      if len(language) > 32 or code not in languages.values():
+        prepared.pop('LanguageSetting')
+        actions['LanguageSetting'] = 'archive invalid language; initialize registry default'
+    if ('IsRhdDetected' in known and values.get('IsRHDOverride') == b'1' and
+        values.get('IsRHD') in (b'0', b'1')):
+      prepared['IsRhdDetected'] = values['IsRHD']
+      actions['IsRhdDetected'] = 'preserve legacy steering-wheel side'
   report = {'format': 'starpilot-first-start-migration', 'version': 2,
             'namespace': str(namespace), 'target': str(actual), 'snapshot': str(snapshot),
             'status': 'prepared', 'actions': actions, 'attempted': [], 'written': []}

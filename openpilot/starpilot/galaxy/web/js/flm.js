@@ -6,6 +6,7 @@ import { GalaxySettingRow, settingControl } from "./galaxy-setting-row.js"
 import { PollTimer, connectionError } from "./polling.js"
 import { requestJson } from "./startup.js"
 import { bluetoothConnection } from "./bluetooth-notice.js"
+import { FlmBackup } from './flm-backup.js'
 import { PlotGraph, PlotsPage, chartGeometry } from "./plots.js"
 import { validTrainingResults, readable, detailText, surfaceRows, coordinateText, trackingView, measurementText, validTrackingValues, trackingPlotView, sourceSeconds, validLearningPreference, SURFACE_GROUPS, tunerStatus, learningReason, sourceCaptureCounts, historyTitle, offroadView, FRICTION_NAMES, offroadCoordinateEvidence, recommendationText } from "./flm-training-results.js"
 
@@ -43,7 +44,7 @@ const PARAMETER_LABELS = {
 
 export const FlmPage = {
   name: "FlmPage",
-  components: { GxState, GxNotice, GxDialog, PlotGraph, PlotsPage, GalaxySettingRow },
+  components: { GxState, GxNotice, GxDialog, PlotGraph, PlotsPage, GalaxySettingRow, FlmBackup },
   props: { initialView: { type: String, default: "overview" }, mode: { type: String, required: true }, unauthorized: { type: Function, required: true },
     go: { type: Function, default: path => { window.location.hash = path } } },
   data: () => ({ report: null, error: "", loading: false, request: null, receivedAt: 0, now: 0, bluetooth: bluetoothConnection(),
@@ -85,6 +86,7 @@ export const FlmPage = {
   },
   computed: {
     manualRows() { return (this.manualState.data?.rows || []).map((row, index) => ({ row, index })).filter(({ row }) => this.selectedGroup.names.includes(row.coordinate)) },
+    recoveredManualCurve() { return (this.manualState.data?.rows || []).filter(row => FRICTION_NAMES.includes(row.coordinate)) },
     manualActions() { return (this.manualState.data?.rows || []).map((row, index) => ({ row, index })).filter(({ row }) => row.confirm) },
     manualBusy() { return settingsBusy(this.manualState) },
     manualErrorText() { return this.manualWrite?.status === 'unconfirmed' ? 'Could not confirm this change was saved. Reconnecting to check the saved values.' : this.manualState.error },
@@ -139,10 +141,11 @@ export const FlmPage = {
       return result
     },
     savedSummary() {
-      if (this.offroad?.saved && !['ready_for_next_drive', 'accepted', 'accepted_after_drive', 'rolled_back'].includes(this.offroad.configurationState)) return 'Saved state not confirmed'
+      if (this.offroad?.saved && !['ready_for_next_drive', 'accepted', 'accepted_after_drive', 'retained_after_drive', 'rolled_back'].includes(this.offroad.configurationState)) return 'Saved state not confirmed'
       return this.acceptedCount === null ? 'Saved count not reported' : this.amount(this.acceptedCount) + ' saved'
     },
     savedAdjustments() { return Object.entries(this.offroad?.savedValues || {}).filter(([, value]) => value !== 0).map(([name, value]) => ({ name, value })) },
+    earlierSaved() { return this.report?.savedHistory?.profiles || [] },
     frictionRecommendations() { return (this.offroad?.suggestions || []).filter(row => FRICTION_NAMES.includes(row.parameter)) },
     savedFriction() { return this.savedAdjustments.filter(row => FRICTION_NAMES.includes(row.name)) },
     recordedTrackingChart() { return chartGeometry(this.offroad?.observed?.points || [], ['desired', 'actual']) },
@@ -175,6 +178,7 @@ export const FlmPage = {
     },
   },
   methods: {
+    backupRestored() { this.manualWrite = null;this.manualResetRequested = false;this.manualFeed?.load('tuning');return this.load() },
     dialPercent, ideaStatus, ideaValue, ideaHeading, curvePointLabel, ideaDetails, readable, detailText, coordinateText, measurementText, sourceSeconds, learningReason, historyTitle, recommendationText,
     ideaExplanation(idea) { return idea.reason?.startsWith('observed_') ? learningReason(idea.reason) : ideaExplanation(idea) },
     manualEvidence(name, unit) { return offroadCoordinateEvidence(this.report, name, this.live, unit) },
@@ -266,7 +270,7 @@ export const FlmPage = {
       if (!this.manualState.pending) this.manualResetRequested = false
     },
     cancelManualReset() { this.manualResetRequested = false; this.manualFeed.cancel() },
-    async confirmManualReset() { this.beginManualWrite((this.manualState.data?.rows || []).filter(row => row.coordinate).map(row => [row.coordinate, 0, row.unit])); await this.manualFeed.confirm(); this.manualResetRequested = false },
+    async confirmManualReset() { this.beginManualWrite((this.manualState.data?.rows || []).filter(row => row.coordinate && !FRICTION_NAMES.includes(row.coordinate)).map(row => [row.coordinate, 0, row.unit])); await this.manualFeed.confirm(); this.manualResetRequested = false },
     async saveManual(index, value) {
       const row = this.manualState.data?.rows?.[index]
       if (this.view !== "tune" || !this.manualFeed?.active || this.manualBusy || this.manualState.error ||
@@ -340,13 +344,25 @@ export const FlmPage = {
       </section>
       <section v-if="view === 'tune'" id="tuner-panel-tune" role="tabpanel" aria-labelledby="tuner-tab-tune" class="gx-tuner__panel">
         <div v-if="!offroad" class="gx-tuner__section-heading"><div><h3>Make sense of your tune</h3><p>Review what Auto Learn found, or adjust a setting yourself.</p></div></div>
-        <section v-if="offroad" class="gx-card gx-tuner__findings" :class="{ 'gx-tuner__findings--paired': review.manualGroups.length === 1 && review.curve.length > 0 }" aria-label="Drive findings"><div class="gx-tuner__section-heading"><div><p class="gx-tuner__eyebrow">SUGGESTIONS FROM COMPLETED DRIVING</p><h3>{{ review.title }}</h3><p>{{ review.description }}</p></div><span class="gx-tuner__badge" :data-tone="review.tone">{{ review.tone === 'saved' ? 'Saved tune' : review.count ? 'Review only' : 'No new change' }}</span></div>
-          <div v-if="review.saved.length" class="gx-tuner__saved-list"><h4>{{ review.historical ? 'Earlier saved Auto Learn values' : offroad.configurationState === 'ready_for_next_drive' ? 'Saved for the next drive' : 'Saved Auto Learn values' }}</h4><div v-for="row in review.saved" :key="row.parameter"><span>{{ parameterLabel(row.parameter) }}</span><strong>{{ dialPercent(row.value) }}</strong></div><p>Saved does not mean applied now. The controller confirms use while driving.</p></div>
+        <div v-if="offroad || earlierSaved.length" class="gx-tuner__tune-report">
+        <section class="gx-card gx-tuner__saved-list" aria-labelledby="tuner-saved-title"><h3 id="tuner-saved-title">Auto-learned settings</h3><template v-if="review.saved.length"><p>{{ review.historical ? 'Earlier saved Auto Learn values' : offroad.configurationState === 'ready_for_next_drive' ? 'Saved for the next drive' : 'Saved Auto Learn values' }}</p><div v-for="row in review.saved" :key="row.parameter"><span>{{ parameterLabel(row.parameter) }}</span><strong>{{ dialPercent(row.value) }}</strong></div><p>Saved does not mean applied now. The controller confirms use while driving.</p></template><template v-else-if="earlierSaved.length"><span class="gx-tuner__badge" data-tone="neutral">Earlier saved setup</span><div v-for="[name, value] in earlierSaved[0].values" :key="name"><span>{{ parameterLabel(name) }}</span><strong>{{ dialPercent(value) }}</strong></div></template><p v-else>{{ report?.savedHistory?.status === 'unavailable' ? 'Saved settings are temporarily unavailable.' : savedSummary === 'Saved state not confirmed' ? 'Saved state not confirmed.' : acceptedCount === null ? 'Saved settings are not included in this drive review.' : 'No saved adjustments reported.' }}</p>
+          <details v-if="earlierSaved.length" class="gx-tuner__disclosure"><summary>Saved setup history</summary><section v-for="(profile, index) in earlierSaved" :key="index"><p>{{ profile.state === 'rolled_back' ? 'Restored setup' : 'Saved setup' }} · Drive completed {{ new Date(profile.completedAt).toLocaleString() }}</p><dl class="gx-tuner__exact-values"><template v-for="[name, value] in profile.values" :key="name"><dt>{{ parameterLabel(name) }}</dt><dd>{{ dialPercent(value) }}</dd></template></dl></section></details>
+        </section>
+        <section v-if="offroad" class="gx-card gx-tuner__findings" :class="{ 'gx-tuner__findings--paired': review.manualGroups.length === 1 && review.curve.length > 0 }" aria-labelledby="tuner-suggestions-title"><div class="gx-tuner__section-heading"><div><p class="gx-tuner__eyebrow">SUGGESTIONS FROM RECENT DRIVING</p><h3 id="tuner-suggestions-title">{{ review.count ? 'Suggestions · needs more evidence' : 'No new suggestions' }}</h3><p v-if="review.count">These suggestions are not saved. Auto Learn needs more evidence before saving them automatically.</p><p v-else>No additional suggestions were reported for this drive.</p></div><span class="gx-tuner__badge" :data-tone="review.count ? 'review' : 'neutral'">{{ review.count ? 'Review only' : 'No new change' }}</span></div>
           <p v-if="review.count" class="gx-tuner__caption">{{ review.manual.length }} steering {{ review.manual.length === 1 ? 'finding' : 'findings' }} · {{ review.curve.length }} speed-range {{ review.curve.length === 1 ? 'finding' : 'findings' }}<template v-if="review.other.length"> · {{ review.other.length }} earlier grouped findings</template>. Viewing an idea does not change your tune.</p>
           <div v-if="review.manual.length" class="gx-tuner__idea-grid"><template v-for="area in review.manualGroups" :key="area.id"><template v-if="area.findings.length === 1"><article v-for="idea in area.findings" :key="idea.parameter" class="gx-tuner__idea" :data-coordinate="idea.parameter"><h4>{{ ideaHeading(idea.parameter) }}</h4><span class="gx-tuner__badge" data-tone="review">{{ idea.target === null ? 'Conflicting findings' : 'Not saved' }}</span><p>{{ ideaExplanation(idea) }}</p><button type="button" class="gx-btn gx-btn--tonal" @click="reviewSetting(idea.parameter)">View setting<i class="bi bi-arrow-right" aria-hidden="true"></i></button><details class="gx-tuner__disclosure"><summary>Evidence &amp; exact values</summary><p>{{ parameterLabel(idea.parameter) }}. {{ ideaHelp(idea.parameter) }}</p><dl class="gx-tuner__exact-values"><template v-for="value in ideaDetails(idea)" :key="value.label"><dt>{{ value.label }}</dt><dd>{{ value.value }}</dd></template></dl><p>{{ amount(idea.windows) }} recorded windows.</p><p>{{ learningReason(idea.reason) }}</p></details></article></template><article v-else class="gx-tuner__idea"><span class="gx-tuner__badge" data-tone="review">{{ area.findings.length }} steering findings · not saved</span><h4>{{ area.label }}</h4><p>Several settings in this area were flagged for review. No manual value has been changed.</p><details class="gx-tuner__disclosure"><summary>Review {{ area.findings.length }} findings</summary><section v-for="idea in area.findings" :key="idea.parameter" class="gx-tuner__grouped-idea" :data-coordinate="idea.parameter"><h4>{{ parameterLabel(idea.parameter) }}</h4><p>{{ ideaExplanation(idea) }}</p><span class="gx-tuner__badge" data-tone="review">{{ ideaStatus(idea) }}</span><button type="button" class="gx-btn gx-btn--tonal" @click="reviewSetting(idea.parameter)">View setting</button><details><summary>Evidence &amp; exact values</summary><p>{{ ideaHelp(idea.parameter) }}</p><dl class="gx-tuner__exact-values"><template v-for="value in ideaDetails(idea)" :key="value.label"><dt>{{ value.label }}</dt><dd>{{ value.value }}</dd></template></dl><p>{{ amount(idea.windows) }} recorded windows. {{ learningReason(idea.reason) }}</p></details></section></details></article></template></div>
-          <article v-if="review.curve.length" class="gx-tuner__idea gx-tuner__curve-summary"><span class="gx-tuner__badge" data-tone="review">{{ review.curve.length }} speed-range findings · suggested changes</span><h4>Small steering corrections at different speeds</h4><p>Auto Learn needs more evidence before changing these speed settings. These suggestions are not saved. Auto Learn manages this curve; your manual sliders are separate.</p><button type="button" class="gx-btn gx-btn--tonal" @click="reviewSetting(review.curve[0].parameter)">Review speed settings<i class="bi bi-arrow-right" aria-hidden="true"></i></button><details class="gx-tuner__disclosure"><summary>See all {{ review.curve.length }} findings</summary><div v-for="idea in review.curve" :key="idea.parameter" class="gx-tuner__curve-point" :data-coordinate="idea.parameter"><span>{{ curvePointLabel(idea.parameter) }}</span><small>{{ ideaStatus(idea) }}</small><dl class="gx-tuner__exact-values"><template v-for="value in ideaDetails(idea)" :key="value.label"><dt>{{ value.label }}</dt><dd>{{ value.value }}</dd></template></dl></div></details></article>
+          <article v-if="review.curve.length" class="gx-tuner__idea gx-tuner__curve-summary"><span class="gx-tuner__badge" data-tone="review">{{ review.curve.length }} speed-range findings · suggested changes</span><h4>Small steering corrections at different speeds</h4><p>Auto Learn manages this curve; your manual sliders are separate.</p><button type="button" class="gx-btn gx-btn--tonal" @click="reviewSetting(review.curve[0].parameter)">Review speed settings<i class="bi bi-arrow-right" aria-hidden="true"></i></button><details class="gx-tuner__disclosure"><summary>See all {{ review.curve.length }} findings</summary><div v-for="idea in review.curve" :key="idea.parameter" class="gx-tuner__curve-point" :data-coordinate="idea.parameter"><span>{{ curvePointLabel(idea.parameter) }}</span><small>{{ ideaStatus(idea) }}</small><dl class="gx-tuner__exact-values"><template v-for="value in ideaDetails(idea)" :key="value.label"><dt>{{ value.label }}</dt><dd>{{ value.value }}</dd></template></dl></div></details></article>
           <details v-if="review.other.length" id="tuner-earlier-findings" class="gx-tuner__disclosure"><summary>{{ review.other.length }} earlier grouped findings</summary><p>This older report does not identify a single dial or absolute target for these findings. They are not changes to apply.</p><p v-for="(idea, index) in review.other" :key="index">{{ readable(idea.parameter) }} · {{ recommendationText(idea) }} · {{ amount(idea.windows) }} recorded windows.</p></details>
         </section>
+        </div>
+        <FlmBackup :unauthorized="unauthorized" :parked="preference?.parked === true" :bluetooth="bluetooth" @restored="backupRestored" />
+        <section v-if="recoveredManualCurve.length" class="gx-card gx-tuner__saved-list" aria-labelledby="tuner-recovered-title">
+          <h3 id="tuner-recovered-title">Recovered manual tune</h3><p>Saved manual settings · Auto Learn paused</p>
+          <p>These speed adjustments came from your reviewed backup. Applied state is reported separately.</p>
+          <div v-for="row in recoveredManualCurve" :key="row.coordinate"><span>{{ parameterLabel(row.coordinate) }}</span><strong>{{ dialPercent(Number(row.value) / 100) }}</strong></div>
+          <p>Reset manual tune to remove the recovered settings.</p>
+        </section>
+
         <div class="gx-tuner__tune-layout"><div class="gx-tuner__section-heading"><div><h3>Explore your settings</h3><p>Choose an area below. Amber labels show findings from your drive.</p></div></div><nav class="gx-tuner__groups" aria-label="Steering parameter groups"><button v-for="item in navigationGroups" :key="item.id" type="button" :aria-pressed="group === item.id" :class="{ 'has-ideas': groupHasIdeas(item), 'gx-tuner__curve-tile': item.id === 'friction' }" @click="reviewGroup(item.id)"><i :class="['bi', item.icon]" aria-hidden="true"></i><span>{{ item.label }}<small>{{ item.id === 'friction' ? 'Auto Learn only · ' : '' }}{{ groupChanges(item) }}</small></span><i class="bi" :class="groupHasIdeas(item) ? 'bi-lightbulb' : 'bi-chevron-right'" aria-hidden="true"></i></button></nav>
           <section class="gx-card gx-tuner__section gx-tuner__parameters" :id="group === 'friction' ? 'tuner-friction' : undefined" :aria-labelledby="'tuner-group-' + group + '-title'" tabindex="-1"><div class="gx-tuner__section-heading"><div><p class="gx-tuner__eyebrow">{{ group === 'friction' ? 'MANAGED BY AUTO LEARN' : 'YOUR MANUAL CONTROLS' }}</p><h3 :id="'tuner-group-' + group + '-title'">{{ selectedGroup.label }}</h3><p>{{ selectedGroup.description }}</p></div></div>
             <section v-if="group !== 'friction'" class="gx-tuner__manual" aria-label="Manual tuning"><div class="gx-tuner__manual-note"><i class="bi bi-info-circle" aria-hidden="true"></i><p>Moving a slider saves a manual override for your next drive and pauses Auto Learn. Zero removes the override. Reviewing a finding does neither.</p></div>

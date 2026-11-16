@@ -183,6 +183,8 @@ def native_bootstrap_supported(CP):
 
 
 def intent_disarming_fault(CP, events, state, **context):
+  if CP.brand == 'volkswagen':
+    return volkswagen.intent_disarming_fault(CP, events, state, **context)
   if CP.brand == 'chrysler':
     return chrysler.intent_disarming_fault(CP, events, state, **context)
   return gm.intent_disarming_fault(CP, events, state, **context)

@@ -8,8 +8,10 @@ from openpilot.starpilot.flm.offroad_analysis import analyze, MAX_WINDOWS, cohor
 from openpilot.starpilot.flm.offroad_baseline_windows import baseline_windows
 from openpilot.starpilot.flm.canonical_surface_adapter import NAMES as AMPLITUDE_NAMES
 from openpilot.starpilot.flm.offroad_residual import analyze_stable_windows
-from openpilot.starpilot.flm.offroad_evidence import read_point, whole_windows, eligible_points, tracking_metrics
-from openpilot.starpilot.flm.offroad_route import latest_route, walk_completed_route, RouteInputCancelled, RouteReceipt, SelectedSourceReceipt, route_permission
+from openpilot.starpilot.flm.offroad_evidence import read_point, whole_windows, eligible_points, tracking_metrics, window_demand
+from openpilot.starpilot.flm.offroad_route import (
+  latest_route, walk_completed_route, RouteInputCancelled, RouteReceipt, SelectedSourceReceipt, PartialRouteReceipt, route_permission,
+)
 from openpilot.starpilot.flm.runtime_adapter_registry import car_params_digest
 
 
@@ -46,6 +48,8 @@ class CompletedAssessment:
       'evidence_sources': [asdict(source.receipt) for _, source in sorted(self.evidence_sources.items())],
       'skipped_routes': [list(row) for row in self.route_skips],
       'source_role': (
+        'Partial-drive suggestions only: excluded segments provide no evidence and completion-dependent decisions are disabled.'
+        if type(self.receipt) is PartialRouteReceipt else
         'Input-selected original drive sections; not a whole-drive assessment or live permission.'
         if type(self.receipt) is SelectedSourceReceipt
         else 'Historical diagnostic alignment, not a statement of actual Controls consumption or current permission.'
@@ -53,24 +57,6 @@ class CompletedAssessment:
     }
 
 
-def window_demand(window):
-  import math
-
-  points = window.points
-  rms = math.sqrt(sum(p.desired**2 for p in points) / len(points))
-  return {
-    'domain': window.domain,
-    'duration_ns': points[-1].mono_ns - points[0].mono_ns,
-    'speed_low': min(p.speed_mps for p in points),
-    'speed_high': max(p.speed_mps for p in points),
-    'goal_rms': rms,
-    'goal_shape': [
-      sum(p.desired for p in points[i * len(points) // 8 : (i + 1) * len(points) // 8]) / len(points[i * len(points) // 8 : (i + 1) * len(points) // 8]) / rms
-      if rms > 0
-      else 0.0
-      for i in range(8)
-    ],
-  }
 
 
 def _separate_qualification(report, continuous, *, proposal_windows=None, route_order=None, role_windows=None):
@@ -224,9 +210,10 @@ class RecordedInputs:
   context_metadata: dict
   counts: dict
   quality_stops: list
+  observed_sources: dict = field(default_factory=dict)
 
 
-def collect_route_inputs(root, route, *, permitted, walker=None):
+def collect_route_inputs(root, route, *, permitted, walker=None, isolate_segments=False):
   from openpilot.starpilot.flm.offroad_control_metadata import read_control_metadata as read_control
 
   state = {'cp': None, 'cp_sha': None, 'context': None}
@@ -237,6 +224,7 @@ def collect_route_inputs(root, route, *, permitted, walker=None):
   bookends = {}
   raw_windows = {}
   context_metadata = {}
+  observed = {}
   counts = {
     'recorded_lateral_request_rows': 0,
     'active_lateral_request_rows': 0,
@@ -254,6 +242,8 @@ def collect_route_inputs(root, route, *, permitted, walker=None):
   quality_stops = []
 
   def metadata_for(control, domain):
+    from openpilot.starpilot.flm.route_recording import configuration_values
+
     return {
       'cp_sha256': state['cp_sha'],
       'controller_mode': control.controller_mode,
@@ -264,10 +254,14 @@ def collect_route_inputs(root, route, *, permitted, walker=None):
       'vehicle_model_anchor': control.vehicle_model_anchor,
       'route_scope': getattr(control, 'route_configuration_scope', ''),
       'route_revision': getattr(control, 'route_effect_revision', ''),
-      'route_values': getattr(control, 'route_applied_coordinates', ()),
+      'route_values': configuration_values(
+        getattr(control, 'route_applied_coordinates', ()), getattr(control, 'route_configured_coordinates', ()), getattr(control, 'replay_inputs', ()),
+      ),
     }
 
   def consume(segment, events):
+    if isolate_segments:
+      state['context'] = None  # Partial sections cannot inherit metadata across a missing section.
     companions = {}
     rows = {}
     controls = []
@@ -349,7 +343,11 @@ def collect_route_inputs(root, route, *, permitted, walker=None):
     times = tuple(header for header, _ in timeline)
     for key, groups in rows.items():
       for points in groups:
-        raw_windows.setdefault(key, []).extend(whole_windows(tuple(points)))
+        raw = whole_windows(tuple(points))
+        raw_windows.setdefault(key, []).extend(raw)
+        from openpilot.starpilot.flm.offroad_observed import observed_sources
+
+        observed.setdefault(key, []).extend(observed_sources(raw, timeline, metadata_for))
         for metadata, window, stamps in baseline_windows(tuple(points), timeline, metadata_for):
           context = hashlib.sha256(repr(metadata).encode()).hexdigest()
           context_metadata[context] = metadata
@@ -409,7 +407,7 @@ def collect_route_inputs(root, route, *, permitted, walker=None):
   receipt = (walk_completed_route if walker is None else walker)(root, route, permitted=permitted, consume=consume)
   counts['original_segments_reviewed'] = len(getattr(receipt, 'decoded_segments', receipt.segments))
   counts['original_segments_available'] = len(receipt.segments)
-  return RecordedInputs(receipt, state, windows, stable_windows, baseline_tracking, bookends, raw_windows, context_metadata, counts, quality_stops)
+  return RecordedInputs(receipt, state, windows, stable_windows, baseline_tracking, bookends, raw_windows, context_metadata, counts, quality_stops, observed)
 
 
 def collect_latest_steering_inputs(params, root, *, permitted, selected_route=None):
@@ -422,14 +420,7 @@ def collect_latest_steering_inputs(params, root, *, permitted, selected_route=No
   def allowed():
     return permitted() and time.monotonic() - started <= MAX_ANALYSIS_SECONDS
 
-  def walk(actual_root, original_route, *, permitted, consume):
-    if len(original_route.get('segments', ())) <= 30:
-      return walk_completed_route(actual_root, original_route, permitted=permitted, consume=consume)
-    from openpilot.starpilot.flm.offroad_prior_inputs import _selected_sources
-
-    return _selected_sources(actual_root, original_route, permitted=permitted, consume=consume, cp_sha256=None)
-
-  collected = collect_route_inputs(root, route, permitted=allowed, walker=walk)
+  collected = collect_route_inputs(root, route, permitted=allowed)
   current_cp = collected.receipt.cp_sha256
   skipped = 0
 
@@ -454,7 +445,7 @@ def collect_latest_steering_inputs(params, root, *, permitted, selected_route=No
       from openpilot.starpilot.flm.offroad_route import RouteInputError
 
       try:
-        earlier = collect_route_inputs(root, candidate, permitted=allowed, walker=walk)
+        earlier = collect_route_inputs(root, candidate, permitted=allowed)
       except RouteInputError as error:
         import logging
 
@@ -517,7 +508,7 @@ def _assess_inputs(route, collected, previous, *, permitted, sources=None, route
 
     collected, comparisons, _ = statistical_inputs(collected)
   receipt, state = collected.receipt, collected.state
-  if type(receipt) not in (RouteReceipt, SelectedSourceReceipt):
+  if type(receipt) not in (RouteReceipt, SelectedSourceReceipt, PartialRouteReceipt):
     raise ValueError('An original whole-drive or explicit input-selected receipt is required')
   windows, stable_windows, baseline_tracking = collected.windows, collected.stable_windows, collected.baseline_tracking
   bookends, raw_windows, context_metadata = collected.bookends, collected.raw_windows, collected.context_metadata
@@ -563,14 +554,14 @@ def _assess_inputs(route, collected, previous, *, permitted, sources=None, route
         if w.identity in selected_ids
       ],
     )
-    incomplete = {c['cohort'] for c in report['cohorts'] if not all(role in c for role in ('training', 'heldout'))}
+    observed_conditions = {cohort(w) or 'mixed:observed' for w in values}
     report['observed_original_windows'] = [
       {
         'identity': w.identity, 'route': w.points[0].route, 'cohort': condition,
         'segment': w.points[0].segment, 'start_ns': w.points[0].mono_ns, 'end_ns': w.points[-1].mono_ns,
       }
-      for condition in sorted(incomplete)
-      for w in _spread([w for w in values if cohort(w) == condition], MAX_COHORT_WINDOWS // 2)
+      for condition in sorted(observed_conditions)
+      for w in _spread([w for w in values if (cohort(w) or 'mixed:observed') == condition], MAX_COHORT_WINDOWS // 2)
     ]
     if key in comparisons:
       from openpilot.starpilot.flm.offroad_history import bind_original_contexts
@@ -632,6 +623,8 @@ def _assess_inputs(route, collected, previous, *, permitted, sources=None, route
     stable.append(report)
   counts['stable_qualified_whole_windows'] = sum(map(len, stable_windows.values()))
   diagnostic = []
+  from openpilot.starpilot.flm.offroad_observed import merge_sources
+
   for key, values in sorted(raw_windows.items()):
     if not values:
       continue
@@ -641,11 +634,12 @@ def _assess_inputs(route, collected, previous, *, permitted, sources=None, route
         **analyze(tuple(values), amplitude_prior, permitted=permitted),
         'qualification': 'recorded_tracking_only_not_controller_or_native_qualification',
         'automatic_application_allowed': False,
+        'observed_sources': merge_sources(collected.observed_sources.get(key, ())),
       }
     )
   counts['diagnostic_whole_windows'] = sum(map(len, raw_windows.values()))
   return CompletedAssessment(
     receipt, reports, counts, state['cp'], (), route, tuple(quality_stops), tuple(diagnostic), tuple(stable),
-    _recorded_tracking(proposal_windows), sources,
+    _recorded_tracking(proposal_windows) or _recorded_tracking(raw_windows), sources,
   )
 

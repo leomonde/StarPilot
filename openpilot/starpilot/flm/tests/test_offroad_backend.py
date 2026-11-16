@@ -117,7 +117,8 @@ class TestOffroadCache(unittest.TestCase):
   def test_restart_withdraws_trial_and_accepted_rows_do_not_claim(self):
     row = {'state': 'ready_for_next_drive', 'values': values(0.01), 'analysis_sha256': self.cache.put(trial())}
     with (
-      patch('openpilot.starpilot.flm.offroad_worker._current_scope', return_value=scope()),
+      patch('openpilot.starpilot.flm.offroad_runtime.current_scope', return_value=scope()),
+      patch('openpilot.starpilot.saved_source.read_saved', return_value=(b'declared-present-row', True)),
       patch('openpilot.starpilot.flm.offroad_store.startup_row', return_value=(row, 'loaded')),
     ):
       first = from_configuration(None, None, self.cache.directory, vehicle_session='a' * 32)
@@ -213,7 +214,7 @@ class TestOffroadCache(unittest.TestCase):
 
     def collect(root, route, *, permitted, walker=None):
       self.assertTrue(permitted())
-      self.assertTrue(callable(walker))
+      self.assertIsNone(walker, 'Use the default complete route reader')
       calls.append(route['routeId'])
       return parked if route is latest else driving
 
@@ -1794,7 +1795,9 @@ class TestOffroadTrackingPolicy(unittest.TestCase):
       stable_windows={metadata_key: profile, other_key: wrong_map},
     )
     route = {'routeId': prior_id, 'segments': [{'files': {'rlog': True}} for _ in range(8)]}
-    assessment = SimpleNamespace(receipt=SimpleNamespace(route_id=current_id, cp_sha256='a' * 64, completed_wall_ns=10))
+    assessment = SimpleNamespace(receipt=SimpleNamespace(
+      route_id=current_id, cp_sha256='a' * 64, completed_wall_ns=10, segments=((current_id + '--0', 'c' * 64, 1),),
+    ))
     with (
       patch.object(module, 'route_inventory', return_value={'scanIncomplete': False, 'routes': [route]}),
       patch.object(module, 'collect_route_inputs', return_value=collected),

@@ -1,7 +1,5 @@
 """Galaxy-only, next-drive developer preferences."""
 
-from dataclasses import replace
-
 from openpilot.starpilot.longitudinal.voacc import KEY, DESCRIPTION
 from openpilot.starpilot.ui.calibration_reset import calibration_reset
 from openpilot.starpilot.saved_document import commit_exact
@@ -22,6 +20,13 @@ STARPORT_NEW_SETUP_DESCRIPTION = ("Guided StarPort setup with a live checklist o
 STARPORT_HEVC_KEY = "StarPortAllowHevc"
 STARPORT_HEVC_DESCRIPTION = ("Experimental. Only for a car that offers H.265 and no H.264 video. Cars that offer H.264 are not " +
                              "affected. Applies from the next StarPort connection.")
+STARPORT_KEYFRAME_TEST_KEY = "StarPortKeyframeTest"
+STARPORT_KEYFRAME_TEST_DESCRIPTION = ("Experimental test for a car that only takes H.265. Sends every frame as a keyframe and logs the car's " +
+                                      "acknowledgments. H.264 cars are not affected. Applies from the next StarPort connection.")
+STARPORT_TALL_HEVC_KEY = "StarPortTallHevc"
+STARPORT_TALL_HEVC_DESCRIPTION = ("Experimental test for a car that only takes H.265. Uses the car's 1080x1920 screen mode instead of " +
+                                  "720x1280 when it offers one. Needs Allow H.265 video on. H.264 cars are not affected. " +
+                                  "Applies from the next StarPort connection.")
 STARPORT_EXPERIMENTS_KEY = "StarPortHeadUnitExperiments"
 STARPORT_EXPERIMENTS_DESCRIPTION = ("Shows experimental fixes for specific cars and dongles, each with its own switch. Turn off to use the " +
                                     "standard connection for every car. Applies from the next StarPort connection.")
@@ -31,10 +36,9 @@ DRIVER_MONITORING_RESET_DESCRIPTION = "Clear saved wheel-side detection. Automat
 
 
 class DeveloperSettingsOwner:
-  def __init__(self, params, authorized, *, panda_wake=None, starport=None):
+  def __init__(self, params, authorized, *, starport=None):
     self.params = params
     self.authorized = authorized
-    self.panda_wake = panda_wake
     self.starport = starport  # returns the StarPort daemon client
 
   def _starport_status(self):
@@ -61,6 +65,15 @@ class DeveloperSettingsOwner:
                              ("Off", "On"), available=parked, reason=STARPORT_WIFI_DESCRIPTION if parked else held, default_value="On"))
       rows.append(FeatureRow(STARPORT_HEVC_KEY, "Allow H.265 video", "On" if hevc else "Off", b"1" if hevc else b"0",
                              ("Off", "On"), available=parked, reason=STARPORT_HEVC_DESCRIPTION if parked else held, default_value="Off"))
+      keyframe_test = bool(status.get("keyframe_test"))
+      rows.append(FeatureRow(STARPORT_KEYFRAME_TEST_KEY, "Keyframe-only video test", "On" if keyframe_test else "Off",
+                             b"1" if keyframe_test else b"0",
+                             ("Off", "On"), available=parked, reason=STARPORT_KEYFRAME_TEST_DESCRIPTION if parked else held,
+                             default_value="Off"))
+      tall_hevc = bool(status.get("tall_hevc"))
+      rows.append(FeatureRow(STARPORT_TALL_HEVC_KEY, "H.265 at 1080x1920", "On" if tall_hevc else "Off", b"1" if tall_hevc else b"0",
+                             ("Off", "On"), available=parked, reason=STARPORT_TALL_HEVC_DESCRIPTION if parked else held,
+                             default_value="Off"))
       experiments = bool(status.get("head_unit_experiments"))
       chosen = set(status.get("head_unit_experiment_rules") or ())
       rows.append(FeatureRow(STARPORT_EXPERIMENTS_KEY, "Try experimental fixes", "On" if experiments else "Off",
@@ -99,13 +112,10 @@ class DeveloperSettingsOwner:
                                  calibration_raw if calibration_readable else None, available=calibration_available,
                                  reason=CALIBRATION_RESET_DESCRIPTION if calibration_available else
                                         "Park the vehicle and wait for any pending reset to finish.")
-    firmware_rows = (() if self.panda_wake is None else
-                     tuple(replace(item, vehicle_fingerprint=item.capability[0])
-                           for item in self.panda_wake.rows(parked) if item.key == "IgnoreIgnitionLine"))
     starport_rows = self._starport_rows(parked)
-    summary = "Changes apply next drive. Panda firmware changes require a device restart." if firmware_rows else "Changes apply next drive."
+    summary = "Changes apply next drive."
     return FeatureSettingsState("developer", "Developer driving options", summary,
-                                (row, reset_row, calibration_row, *firmware_rows, *starport_rows), parked)
+                                (row, reset_row, calibration_row, *starport_rows), parked)
 
   def apply(self, request):
     if request.key == CALIBRATION_RESET:
@@ -128,12 +138,14 @@ class DeveloperSettingsOwner:
       except (OSError, RuntimeError, TypeError, ValueError):
         return False
       return True
-    if request.key == "IgnoreIgnitionLine":
-      return self.panda_wake is not None and self.panda_wake.apply(request)
     if request.key == STARPORT_WIFI_KEY:
       return self._apply_starport(request, "dedicated_wifi_interface", "set_dedicated_wifi")
     if request.key == STARPORT_HEVC_KEY:
       return self._apply_starport(request, "allow_hevc", "set_allow_hevc")
+    if request.key == STARPORT_KEYFRAME_TEST_KEY:
+      return self._apply_starport(request, "keyframe_test", "set_keyframe_test")
+    if request.key == STARPORT_TALL_HEVC_KEY:
+      return self._apply_starport(request, "tall_hevc", "set_tall_hevc")
     if request.key == STARPORT_EXPERIMENTS_KEY:
       return self._apply_starport(request, "head_unit_experiments", "set_head_unit_experiments")
     if request.key.startswith(STARPORT_EXPERIMENT_PREFIX):

@@ -56,6 +56,8 @@ def fit_training_step(assessment, group, cohort, proposal, previous, root, *, pe
         'attempts': attempts,
         'selected_fraction': fraction,
       }
+    if _original_input_refusal(checked):
+      break
   return None, {
     'policy': 'training_only_native_feasibility_v1',
     'training_windows': train,
@@ -79,6 +81,7 @@ def fit_independent_route(assessment, group, cohort, prior, proposal, previous, 
     or not 6 <= len(validation) <= 12
     or len(set(train + validation)) != len(train + validation)
     or assessment.receipt.source_sha256 == prior.receipt.source_sha256
+    or {row[1] for row in assessment.receipt.segments}.intersection(row[1] for row in prior.receipt.segments)
     or assessment.receipt.route_id == prior.receipt.route_id
     or prior.receipt.completed_wall_ns >= assessment.receipt.completed_wall_ns
     or prior.receipt.cp_sha256 != assessment.receipt.cp_sha256
@@ -118,6 +121,8 @@ def fit_independent_route(assessment, group, cohort, prior, proposal, previous, 
     )
     attempts.append({'fraction': fraction, 'feasible': feasible, 'original_training_windows': checked})
     if not feasible:
+      if _original_input_refusal(checked):
+        break
       continue
     proof['selected_fraction'] = fraction
     # The independent drive's actual response is read only after strength freezes.
@@ -138,6 +143,12 @@ def fit_independent_route(assessment, group, cohort, prior, proposal, previous, 
       observed = estimate(prior.tracking_windows, cohort=cohort['cohort'], permitted=permitted)
       _, side, phase = cohort['cohort'].split(':')
       replication = None if observed is None else suggest(observed, {name: previous[name] for name in NAMES}, side=side, phase=phase)
+      if observed is not None and proposal.get('coordinate_policy') in ('angle_tracking_supported26_v1', 'acceleration_center_deadbands_v1'):
+        from openpilot.starpilot.flm.offroad_coordinate_policy import tracking_coordinate_candidates
+
+        replication = next((p for p in tracking_coordinate_candidates(
+          observed, prior.tracking_windows, {name: previous[name] for name in NAMES}, side=side, phase=phase,
+        ) if p['parameter'] == proposal['parameter']), None)
       supported = (
         replication is not None
         and replication['parameter'] == proposal['parameter']
@@ -185,6 +196,19 @@ def fit_independent_route(assessment, group, cohort, prior, proposal, previous, 
   return None, proof, None
 
 
+def _original_input_refusal(rows):
+  # Neither strength nor candidate values change these original-source labels.
+  for row in rows:
+    numerical = row.get('numerical') or {}
+    reason = numerical.get('reason')
+    if not row['qualified'] and (
+      reason == 'original_hint_requires_exact_unclipped_native_pair'
+      or reason == 'same_state_controller_checks_only' and type(numerical.get('scored_frames')) is int and numerical['scored_frames'] < 50
+    ):
+      return True
+  return False
+
+
 def _changed_windows(results):
   return {
     r['window']
@@ -219,6 +243,10 @@ def _release_unused_analysis_heap():
 
 
 def _original_results(assessment, original, ids, values, root, *, permitted, source_batch=False):
+  from openpilot.starpilot.flm.offroad_route import PartialRouteReceipt
+
+  if type(getattr(assessment, 'receipt', None)) is PartialRouteReceipt:
+    raise ValueError('Partial reviews cannot qualify a tune or resolve a trial')
   permitted = route_permission(permitted)
   try:
     return _read_original_results(assessment, original, ids, values, root, permitted=permitted, source_batch=source_batch)
@@ -302,11 +330,10 @@ def _read_original_results(assessment, original, ids, values, root, *, permitted
       if any(start - 30_000_000 <= stamp <= end + 30_000_000 for stamp in missing):
         results.append({'window': wid, 'qualified': False, 'reason': 'original_control_or_delivery_metadata_omitted'})
         continue
-      before = [c for c in controls if c.control_ns <= start and c.replay_snapshot and start - c.control_ns <= 1_000_000_000]
-      if not before:
+      checkpoint = original_checkpoint(controls, outputs, start)
+      if checkpoint is None:
         results.append({'window': wid, 'qualified': False, 'reason': 'original_checkpoint_preroll_missing'})
         continue
-      checkpoint = max(c.control_ns for c in before)
       block = tuple(c for c in controls if checkpoint <= c.control_ns <= end + 30_000_000)
       original_outputs = tuple(outputs)
       numerical = check_candidate(assessment.cp, block, values, score_start_ns=start, score_end_ns=end, require_change=False, original_outputs=original_outputs)
@@ -366,6 +393,28 @@ def needed_original(event, ranges, kind):
   try:
     row = event.starpilotLateralState.learningEvidence if kind == 'control' else event.starpilotCarState.appliedEvidence
     stamp = int(row.controlMonoTime)
+    if not 0 < stamp <= header:
+      return False
+    if kind == 'applied':
+      applied, observed = int(row.appliedMonoTime), int(row.carrierObservedMonoTime)
+      if not stamp <= applied <= observed <= header:
+        return False
+      # Card's recorded observation can be in range even when publication is later.
+      if any(start - 1_000_000_000 <= observed <= end + 30_000_000 for start, end in ranges):
+        return True
   except (ValueError, TypeError, AttributeError, OverflowError):
     return False
-  return any(start - 1_000_000_000 <= stamp <= end for start, end in ranges)
+  return any(start - 1_000_000_000 <= stamp <= end + 30_000_000 for start, end in ranges)
+
+
+def original_checkpoint(controls, outputs, start):
+  """Keep the real source of the starting Card hold inside existing pre-roll."""
+  before = [c.control_ns for c in controls if c.replay_snapshot and start - 1_000_000_000 <= c.control_ns <= start]
+  if not before:
+    return None
+  first = min((c.control_ns for c in controls if c.control_ns >= start), default=start)
+  carriers = [] if any(o.control_ns == first for o in outputs) else [
+    o for o in outputs if first - 30_000_000 <= o.carrier_observed_ns <= first
+  ]
+  cutoff = min(start, max(carriers, key=lambda o: o.carrier_observed_ns).control_ns) if carriers else start
+  return max((stamp for stamp in before if stamp <= cutoff), default=None)

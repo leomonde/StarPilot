@@ -35,7 +35,8 @@ def diagnostics(report, params):
   result['current']['analysis'] = {key: details[key] for key in (
     'Recorded steering observations', 'Retained control windows', 'Retained tracking windows', 'Recorded drive coverage',
     'Drives in steering evidence history', 'Saved route adjustment count', 'Saved route configuration state',
-    'Recorded coordinate recommendations', 'Controller and encoder check windows', 'Automatic tune refusal reasons') if key in details}
+            'Recorded coordinate recommendations', 'Recorded suggestion sources', 'Controller and encoder check windows', 'Automatic tune refusal reasons',
+            'Drive analysis is partial', 'Partial drive segments', 'Omitted recorded segments') if key in details}
   result['current']['skipped_drives'] = _result({'skipped_routes': details.get('Skipped recorded drives', [])})['skipped_drives']
   if params is None:
     result['storage'] = {'status': 'unavailable'}
@@ -62,6 +63,22 @@ def diagnostics(report, params):
       result['checkpoints'] = [_result(row['result']) for row in cache.checkpoints()]
   except (OSError, ValueError, TypeError, KeyError) as error:
     result['storage'] = {'status': 'unavailable', 'reason': _reason(error)}
+  try:
+    from openpilot.starpilot.flm.offroad_saved_history import SavedHistory
+    from openpilot.starpilot.flm.offroad_store import validate_row
+
+    snapshots = SavedHistory(params).read()
+    previous, seen = [], set()
+    for text in reversed(list(snapshots.values())[-8:]):
+      for key, row in json.loads(text).get(NAMESPACE, {}).items():
+        if key in seen:
+          continue
+        seen.add(key)
+        validate_row(row)
+        previous.append({'controller_mode': row['scope']['controller_mode'], 'state': row['state'], 'values': row['values']})
+    result['saved_history'] = {'snapshots': len(snapshots), 'historical_only': True, 'previous_setups': previous}
+  except (OSError, ValueError, TypeError, KeyError) as error:
+    result['saved_history'] = {'status': 'unavailable', 'reason': _reason(error), 'historical_only': True}
   return result
 
 

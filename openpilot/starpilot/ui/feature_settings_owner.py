@@ -833,7 +833,7 @@ class FeatureSettingsOwner:
     return FeatureRow(KEY, "Highway Smoothing", f"{strength:.0f}" if valid else "Invalid saved value", raw,
                       step=1.0 if valid else 0., minimum=0., maximum=100., unit="%",
                       available=allowed and (valid or self.authority("parked_preferences") and self._readable(KEY)),
-                      repair_value="0" if not valid else "", default_value="70",
+                      repair_value="0" if not valid else "", default_value="0",
                       vehicle_fingerprint=self.vehicle_fingerprint(), capability=capability,
                       reason="Reduces small steering corrections on highways above about 40 mph. 0% is off; higher values add more smoothing.")
 
@@ -955,7 +955,7 @@ class FeatureSettingsOwner:
       rows.extend(self.gm_truck.rows(parked))
       rows.extend(self.gm_ev_preset.rows(parked))
       rows.extend(self.volt_radar.rows())
-      rows.extend(row for row in self.panda_wake.rows(parked) if row.key != "IgnoreIgnitionLine")
+      rows.extend(self.panda_wake.rows(parked))
       pedal_capability = self._pedal_setup_capability()
       if pedal_capability is not None:
         from opendbc.car.gm.values import GMFlags

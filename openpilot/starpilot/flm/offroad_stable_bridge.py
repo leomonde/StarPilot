@@ -46,6 +46,32 @@ def independent_profile_support(training, heldout, previous):
   return changed
 
 
+def coordinate_review(training, heldout, previous):
+  """Review each frozen setting without letting a failed bundle hide usable ideas."""
+  observed = {}
+  for proposal in heldout:
+    if proposal is not None:
+      for name, value in proposal['values'].items():
+        if value != previous[name]:
+          observed.setdefault(name, []).append(value - previous[name])
+  result = {}
+  for proposal in training:
+    if proposal is None:
+      continue
+    for name, value in proposal['values'].items():
+      delta = value - previous[name]
+      if delta == 0:
+        continue
+      support = observed.get(name, ())
+      reason = 'training_candidate_not_independently_confirmed'
+      if any(delta * other < 0 for other in support):
+        reason = 'conflicting_recorded_candidates'
+      elif any(delta * other > 0 and abs(delta) <= abs(other) for other in support):
+        reason = 'independent_support_for_frozen_training_profile'
+      result[name, value] = {'parameter': name, 'target': value, 'reason': reason}
+  return list(result.values())
+
+
 def profile_sections(windows, rows, contexts):
   """Join adjacent observations within ONE role; never fill a source gap."""
   if any(not rows.get(key) for key in windows):
@@ -119,16 +145,18 @@ class StableRouteSelector:
     # No old platform preset or invented baseline/friction curve is installed.
     self.policy = StablePolicy(self.catalog, {self.family: factors})
     self.rows: dict[str, list[FLMSample] | None] | None = None
-    self.spans = {}
-    self.contexts = {}
+    self.spans: dict[str, dict] = {}
+    self.contexts: dict[str, str] = {}
     for group, ids in groups:
       if group['original_metadata']['domain'] != 'lateral_acceleration':
         continue
       for window in (*group['selected_original_windows'], *group.get('observed_original_windows', ())):
         if window['identity'] in ids:
           if window['identity'] in self.spans and self.spans[window['identity']] != window:
-            raise ValueError('Conflicting original window identity')
-          self.spans[window['identity']] = window
+            binding = ('identity', 'route', 'segment', 'start_ns', 'end_ns')
+            if any(self.spans[window['identity']].get(name) != window.get(name) for name in binding):
+              raise ValueError('Conflicting original window identity')
+          self.spans.setdefault(window['identity'], window)
           context = group.get('original_window_contexts', {}).get(window['identity'])
           original = group['original_metadata'] if context is None else group['original_contexts'][context]
           comparison = dict(original)
@@ -140,6 +168,16 @@ class StableRouteSelector:
           self.contexts[window['identity']] = context_key
     if len(self.spans) > 4096:
       raise ValueError('Original whole-window bound')
+
+  def include_observations(self, context, windows):
+    if self.rows is not None or len(self.spans) + len(windows) > 4096:
+      raise ValueError('Observation sources must be frozen before original reads')
+    for window in windows:
+      key = window['identity']
+      if key in self.spans and self.spans[key] != window:
+        raise ValueError('Conflicting original observation identity')
+      self.spans[key] = window
+      self.contexts[key] = context
 
   def _load(self):
     if getattr(self.assessment, 'evidence_sources', None):
@@ -247,8 +285,8 @@ class StableRouteSelector:
         invalid.add(key)
     self.rows = {key: None if key in invalid else values for key, values in rows.items()}
 
-  def profile(self, windows, cohort):
-    if not 3 <= len(windows) <= 12 or len(set(windows)) != len(windows):
+  def profile(self, windows, cohort, *, observations_only=False):
+    if not (1 if observations_only else 3) <= len(windows) <= 12 or len(set(windows)) != len(windows):
       raise ValueError('Bounded unique original profile windows required')
     if self.rows is None:
       self._load()
@@ -309,6 +347,8 @@ class StableRouteSelector:
       recommended['frictionCurveUnits'] = 'relative_actual_selected_threshold'
     report = {'original_windows': windows, 'supported_dimensions': len(selected), 'unavailable_dimensions': unavailable, 'profile': recommended}
     report['coordinate_candidates'] = coordinate_candidates(observations, self.previous)
+    if observations_only:
+      report['coordinate_observations'] = observations
     if recommended is None:
       mapped = None
     else:
@@ -318,6 +358,36 @@ class StableRouteSelector:
         mapped = None
         report['conversion_refusal'] = str(error)
     return mapped, report
+
+  def observe(self, windows):
+    """Pool original symptoms across maneuvers without granting native fit credit."""
+    from openpilot.starpilot.flm.offroad_coordinate_policy import coordinate_candidates
+    from openpilot.starpilot.flm.offroad_observed import curve_candidates
+
+    if not 1 <= len(windows) <= 4096 or len(set(windows)) != len(windows) or any(key not in self.spans for key in windows):
+      raise ValueError('Bounded unique original observations required')
+    if self.rows is None:
+      self._load()
+    assert self.rows is not None
+    ordered = sorted(windows, key=lambda key: (self.spans[key]['route'], self.spans[key]['segment'], self.spans[key]['start_ns']))
+    available = [key for key in ordered if self.rows.get(key) is not None]
+    available_ids = set(available)
+    observations = []
+    profiles = []
+    # Four seconds of shared original context preserve the existing 3.6 s
+    # curve detector at batch edges. Votes still count each source window once.
+    for start in range(0, len(available), 10):
+      if not self.permitted():
+        raise ValueError('Parked observation analysis cancelled')
+      mapped, proof = self.profile(tuple(available[start:start + 12]), 'observed_maneuvers', observations_only=True)
+      observations.extend(proof['coordinate_observations'])
+      profiles.append((mapped, proof['coordinate_observations']))
+    return {
+      'original_windows': ordered,
+      'unavailable_original_windows': [key for key in ordered if key not in available_ids],
+      'coordinate_candidates': coordinate_candidates(observations, self.previous) + curve_candidates(profiles, self.previous),
+      'automatic_application_allowed': False,
+    }
 
   def propose(self, group, cohort):
     ids = {role: tuple(cohort[role]['windows']) for role in ('training', 'heldout')}
@@ -356,6 +426,7 @@ class StableRouteSelector:
     # These alternatives are frozen before held-out summaries are read.
     coordinate_training = training_report.get('coordinate_candidates', [])
     heldout, heldout_report = self.profile(ids['heldout'], cohort['cohort'])
+    feedback = coordinate_review([training, *coordinate_training], [heldout, *heldout_report.get('coordinate_candidates', ())], self.previous)
     independent = {p['parameter']: p for p in heldout_report.get('coordinate_candidates', [])}
     coordinate_supported = [p for p in coordinate_training if independent_profile_support(p, independent.get(p['parameter']), self.previous)]
     # A one-coordinate recipe plus the recorded prior is exact; avoid repeating
@@ -375,6 +446,7 @@ class StableRouteSelector:
       'all_original_windows_still_required': True,
       'physical_improvement_proven': False,
       'coordinate_candidates': coordinate_supported,
+      'coordinate_review': feedback,
     }
     if not agrees:
       return None, proof

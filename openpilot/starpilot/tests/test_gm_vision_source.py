@@ -5,6 +5,7 @@ from unittest.mock import Mock, patch
 
 from openpilot.starpilot.audio.departure_alert import DepartureNotifications
 from openpilot.cereal import messaging
+from openpilot.common.constants import CV
 from openpilot.common.params import Params
 from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.starpilot.speed_limits import planner_host as slc_host
@@ -62,7 +63,8 @@ class TestGmVisionSource(unittest.TestCase):
       cases = [(configured(params, identity, **kwargs), True) for identity, kwargs in LONG_CASES]
       cases += [(configured(params, identity, **kwargs), False) for identity, kwargs in STOCK_CASES]
       for identity in ORDINARY_ASCM_CAR | ORDINARY_SDGM_CAR:
-        cases.extend((ordinary_params(identity, sascm=True, alpha=alpha), alpha) for alpha in (False, True))
+        cases.extend((ordinary_params(identity, sascm=True, alpha=alpha),
+                      alpha and identity != CAR.BUICK_ENVISION_SDGM) for alpha in (False, True))
       for cp, control in cases:
         with self.subTest(identity=cp.carFingerprint, word=cp.safetyConfigs[0].safetyParam):
           self.assertTrue(enabled(params, cp, 'vision', {}))
@@ -111,7 +113,7 @@ class TestGmVisionSource(unittest.TestCase):
       state = output.message.slcState
       self.assertTrue(state.hasCeiling)
       self.assertAlmostEqual(output.result.ceiling.speed_mps, cap, places=4)
-      self.assertEqual(state.isLimitingMaxSet, cap < driver_set / 3.6)
+      self.assertEqual(state.isLimitingMaxSet, mph <= round(driver_set * CV.KPH_TO_MPH))
       self.assertEqual(sm['carState'].vCruise, driver_set)
       self.assertEqual(sm['carState'].vCruiseCluster, driver_set)
 

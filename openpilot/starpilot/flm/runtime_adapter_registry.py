@@ -10,7 +10,6 @@ import time
 from functools import cache
 from pathlib import Path
 import importlib
-from opendbc.car.car_helpers import interfaces
 from openpilot.starpilot.lateral.learning_preferences import read_preference, KEY as PREFERENCE_KEY
 from openpilot.starpilot.lateral.torque_settings import DOCUMENT_KEY, LEGACY_KEYS, MAX_DOCUMENT_BYTES, parse_document, interpret_legacy
 from openpilot.starpilot.saved_source import read_saved
@@ -20,37 +19,15 @@ REVISION = 'actual-controller-registry-v2'
 
 @cache
 def implementation_revision(controller_type, interface_type):
-  """Startup/optional-process source identity; never invoked by Controls.tick.
-
-  Bind shaping and conversion implementation changes as well as numeric CP
-  values. Formatting changes conservatively discard stored priors too.
-  """
-  here = Path(__file__).resolve().parent
-  controller_root = Path(cast(str, importlib.import_module(controller_type.__module__).__file__)).resolve().parent
-  brand_root = Path(cast(str, importlib.import_module(interface_type.__module__).__file__)).resolve().parent
-  common_root = here.parents[1] / 'common'
-  inherited_roots = tuple(
-    Path(cast(str, importlib.import_module(base.__module__).__file__)).resolve().parent
-    for base in controller_type.__mro__
-    if base.__module__.startswith('openpilot.')
-  )
-  roots = (here, here.parent / 'lateral', controller_root, brand_root, brand_root.parent, common_root, *inherited_roots)
-  files = tuple(sorted({path for root in roots for path in root.glob('*.py')}))
-  if not files or len(files) > 512:
-    raise ValueError('controller implementation identity bound')
-  result = hashlib.sha256()
-  result.update((controller_type.__module__ + '.' + controller_type.__qualname__).encode('utf-8'))
-  result.update((interface_type.__module__ + '.' + interface_type.__qualname__).encode('utf-8'))
-  for path in files:
-    data = path.read_bytes()
-    if len(data) > 2 * 1024 * 1024:
-      raise ValueError('implementation source bound')
-    result.update(path.name.encode('utf-8'))
-    result.update(hashlib.sha256(data).digest())
+  """Selected steering semantics; startup only, never Controls.tick."""
   from openpilot.starpilot.flm.native_primitives import native_identity
+  from openpilot.starpilot.flm.steering_compatibility import revision
 
-  result.update(native_identity().encode('utf-8'))
-  return REVISION + ':' + result.hexdigest()
+  here = Path(__file__).resolve().parent
+  controller = Path(cast(str, importlib.import_module(controller_type.__module__).__file__)).resolve()
+  interface = Path(cast(str, importlib.import_module(interface_type.__module__).__file__)).resolve()
+  names = (controller_type.__module__ + '.' + controller_type.__qualname__, interface_type.__module__ + '.' + interface_type.__qualname__)
+  return revision(here.parents[2], controller, interface, names, native_identity())
 
 
 SOURCE_LEASE_NS = 500_000_000
@@ -396,6 +373,7 @@ class ControllerDescriptor:
 
 def selected_descriptor(cp, ci, controller):
   """Use the registered constructor plus the object actually selected by Controls."""
+  from opendbc.car.car_helpers import interfaces
   from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
   from openpilot.selfdrive.controls.lib.latcontrol_angle import LatControlAngle
   from openpilot.selfdrive.controls.lib.latcontrol_curvature import LatControlCurvature
@@ -459,6 +437,18 @@ def baseline_revision(descriptor, values):
   return hashlib.sha256(repr((descriptor, tuple(values))).encode('ascii')).hexdigest()
 
 
+def compatibility_for(cp, ci, controller):
+  """Actual selected semantics for explicit recovery; not learned qualification."""
+  from openpilot.starpilot.flm.offroad_surface import ROUTE_MANIFEST_SHA256
+  descriptor = selected_descriptor(cp, ci, controller)
+  if descriptor is None:
+    raise ValueError('Actual registered steering controller required')
+  return {'cp_sha256': descriptor.cp_sha256, 'controller_revision': descriptor.controller_revision,
+          'baseline_revision': baseline_revision(descriptor, baseline_values(controller)),
+          'controller_mode': descriptor.controller_mode, 'controller_domain': descriptor.domain,
+          'manifest_sha256': ROUTE_MANIFEST_SHA256}
+
+
 def selected_identity(descriptor, source_epoch, baseline=""):
   if len(source_epoch) != 64:
     raise ValueError('source epoch')
@@ -468,6 +458,7 @@ def selected_identity(descriptor, source_epoch, baseline=""):
 def ford_downstream(cp):
   # The BluePilot lateral library owns Ford steering when its bit is in the final admitted CP safety word;
   # no settings read or generic angle-output inference establishes this role.
+  from opendbc.car.car_helpers import interfaces
   from opendbc.car.ford.aol import BP_LATERAL, aol_safety_config
 
   config = aol_safety_config(cp) if cp.brand == 'ford' else None
