@@ -17,12 +17,7 @@ def controller(cam_brake=False):
   cc = CarController.__new__(CarController)
   cc.eucd_cam_brake = cam_brake
   cc.eucd_cam_brake_honor = False
-  cc.eucd_cam_delta_frames = 0
-  cc.eucd_cam_mode0_frames = 0
   return cc
-
-
-HOLD_FRAMES = round(CCP.EUCD_CAMERA_BRAKE_HONOR_DELTA_TIME / CCP.EUCD_LONG_TX_PERIOD)
 
 
 def test_hard_camera_brake_followed_at_once_and_latched():
@@ -36,29 +31,15 @@ def test_hard_camera_brake_followed_at_once_and_latched():
 def test_mild_camera_brake_ignored():
   cc = controller(cam_brake=True)
   assert cc._eucd_camera_brake(0.1, -1.0) == 0.1
-  assert cc._eucd_camera_brake(-0.75, -2.2) == -0.75  # 1.45 harder: still OP's
+  assert cc._eucd_camera_brake(-0.75, -3.4) == -0.75  # above the emergency limit: still OP's
   assert not cc.eucd_cam_brake_honor
 
 
-def test_camera_brake_well_past_ops_for_2s_is_followed_and_latched():
-  # Route 1f: cut-in, camera -2.56 vs OP +0.09 (665.4 s); camera -2.00 vs OP -0.48 before its abort 0x10 (721.7 s)
-  for op, cam in ((0.09, -2.56), (-0.48, -2.00)):
-    cc = controller(cam_brake=True)
-    for _ in range(HOLD_FRAMES - 1):
-      assert cc._eucd_camera_brake(op, cam) == op  # OP's own until the delta has lasted 2 s
-    assert cc._eucd_camera_brake(op, cam) == cam
-    assert cc._eucd_camera_brake(op, -0.5) == -0.5  # latched while the camera brakes, also when it eases
-    cc.eucd_cam_brake = False
-    assert cc._eucd_camera_brake(op, -0.5) == op
-
-
-def test_short_camera_delta_is_left_to_op():
-  # Leads braking in routes 10 and 1a: under 2 s past OP, OP handled them
+def test_camera_brake_past_ops_is_left_to_op():
+  # Route 1f: cut-in, camera -2.56 vs OP +0.09 (665.4 s): only the emergency brake is the camera's
   cc = controller(cam_brake=True)
-  for _ in range(3):
-    for _ in range(HOLD_FRAMES - 1):
-      assert cc._eucd_camera_brake(0.0, -2.0) == 0.0
-    assert cc._eucd_camera_brake(0.0, -1.0) == 0.0  # back within the delta: the hold starts over
+  for _ in range(500):
+    assert cc._eucd_camera_brake(0.09, -2.56) == 0.09
   assert not cc.eucd_cam_brake_honor
 
 
@@ -67,10 +48,9 @@ def test_hard_camera_brake_needs_no_hold():
   assert cc._eucd_camera_brake(0.0, HARD) == HARD
 
 
-def test_camera_delta_needs_its_brake_request():
+def test_camera_emergency_needs_its_brake_request():
   cc = controller(cam_brake=False)
-  for _ in range(HOLD_FRAMES + 1):
-    assert cc._eucd_camera_brake(0.5, -1.5) == 0.5
+  assert cc._eucd_camera_brake(0.5, HARD) == 0.5
   assert not cc.eucd_cam_brake_honor
 
 
@@ -90,51 +70,12 @@ def fsm3(mode, distance=50, cam_accel=-1.0):
   return SimpleNamespace(eucd_stock_FSM3={"ACC_Mode": mode, "ACC_AccelerationRequest": cam_accel}, eucd_acc_distance=distance)
 
 
-GRACE_FRAMES = round(CCP.EUCD_CAM_MODE0_GRACE / CCP.EUCD_LONG_TX_PERIOD)
-
-
-def run_mode(cs, op_mode, frames):
-  cc = controller()
-  return [cc._eucd_fsm3_mode(cs, op_mode) for _ in range(frames)]
-
-
-@pytest.mark.parametrize("op_mode", [LongMode.COAST, LongMode.DRIVE])
-def test_fsm3_leaves_the_camera_brake_leftover(op_mode):
-  assert set(run_mode(fsm3(LongMode.BRAKE, distance=255, cam_accel=0.96), op_mode, 2 * GRACE_FRAMES)) == {op_mode}
-  assert run_mode(fsm3(LongMode.BRAKE, distance=255, cam_accel=-0.5), op_mode, GRACE_FRAMES)[-1] == LongMode.BRAKE
-
-
-@pytest.mark.parametrize("op_mode", [LongMode.COAST, LongMode.DRIVE])
-def test_fsm3_mirrors_camera_mode_0_after_the_grace(op_mode):
-  # Route 28, 590 s: the camera's ~1.2 s mode 0 behind a close lead cut the traction on a climb
-  modes = run_mode(fsm3(LongMode.BRAKE), op_mode, GRACE_FRAMES)
-  assert set(modes[:-1]) == {op_mode} and modes[-1] == LongMode.BRAKE
-
-
-def test_fsm3_grace_restarts_when_the_camera_leaves_mode_0():
-  cc = controller()
-  for _ in range(GRACE_FRAMES - 1):
-    cc._eucd_fsm3_mode(fsm3(LongMode.BRAKE), LongMode.DRIVE)
-  cc._eucd_fsm3_mode(fsm3(LongMode.COAST), LongMode.DRIVE)
-  assert cc._eucd_fsm3_mode(fsm3(LongMode.BRAKE), LongMode.DRIVE) == LongMode.DRIVE
-
-
-@pytest.mark.parametrize("cam_mode", [LongMode.COAST, LongMode.DRIVE])
-@pytest.mark.parametrize("op_mode", [LongMode.BRAKE, LongMode.COAST, LongMode.DRIVE])
-def test_fsm3_keeps_op_mode_otherwise(cam_mode, op_mode):
-  assert set(run_mode(fsm3(cam_mode), op_mode, 2 * GRACE_FRAMES)) == {op_mode}
-
-
 def test_traction_continuous_at_drive_switch():
   # Coast and drive traction meet at the DRIVE threshold, like the camera
   a = CCP.EUCD_DRIVE_ENTER
   coast = volvocan.eucd_fsm3_traction(a, LongMode.COAST) - 256
   drive = volvocan.eucd_fsm3_traction(a, LongMode.DRIVE)
   assert drive - coast <= 6
-
-
-def test_fsm3_untouched_without_op_mode():
-  assert controller()._eucd_fsm3_mode(fsm3(LongMode.BRAKE), None) is None
 
 
 def offset(pitch_deg):

@@ -176,6 +176,7 @@ class CarStateEUCD(CarStateBase):
     self.eucd_stock_BrakeHold_frames = eucd_all_frames(pt_cp, "BrakeHold")
     self.eucd_stock_EngineData_frames = eucd_all_frames(pt_cp, "EngineData")
     self.eucd_stock_AccHold_frames = eucd_all_frames(pt_cp, "AccHold")
+    self.eucd_stock_AccSpeed_frames = eucd_all_frames(pt_cp, "ACC_Speed")
     self.eucd_stock_CCButtons_frames = eucd_all_frames(pt_cp, "CCButtons")
 
     # TSR speed limit, 0 = no sign

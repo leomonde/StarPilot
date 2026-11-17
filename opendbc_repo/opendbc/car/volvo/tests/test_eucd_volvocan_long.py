@@ -286,3 +286,24 @@ def test_resume_button_copies_the_cem_frame():
   expected[5] &= ~0x20
   expected[7] |= 0x20
   assert dat == bytes(expected)
+
+
+def test_acc_speed_relayed_unchanged():
+  # Route 28: ECM in drive (torque 234), every byte relayed as is
+  stock = bytes.fromhex("a8dcdad7638431ea")
+  assert volvocan.create_eucd_cam_acc_speed(CANPacker(DBC), parse("ACC_Speed", 0x167, 50, stock), False)[1] == stock
+
+
+def test_acc_speed_shows_mode0_torque():
+  stock = bytes.fromhex("a8dcdad7638431ea")
+  out = volvocan.create_eucd_cam_acc_speed(CANPacker(DBC), parse("ACC_Speed", 0x167, 50, stock), True)[1]
+  assert out[:6] == stock[:6] and out[6] & 0xE0 == stock[6] & 0xE0
+  assert (((out[6] & 0x1F) << 8) | out[7]) - 4096 == CarControllerParams.EUCD_MODE0_ECM_TORQUE
+
+
+def test_acc_hold_shows_mode0():
+  stock = bytes.fromhex("c4aaf20e6e6a80f8")
+  packer = CANPacker(DBC)
+  assert volvocan.create_eucd_cam_acc_hold(packer, parse("AccHold", 0x325, 25, stock), False)[1] == stock
+  out = volvocan.create_eucd_cam_acc_hold(packer, parse("AccHold", 0x325, 25, stock), False, show_mode0=True)[1]
+  assert out == stock[:1] + bytes([0xab]) + stock[2:]

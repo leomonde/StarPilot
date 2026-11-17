@@ -1,4 +1,4 @@
-"""Volvo V60 (EUCD) controller; camera takes over only on hard brake, a 1.5 m/s^2 harder brake for 2 s, or its brake mode."""
+"""Volvo V60 (EUCD) controller; OP owns accel and brake, the camera takes over only on its emergency brake."""
 import math
 
 from opendbc.can.packer import CANPacker
@@ -9,7 +9,7 @@ from opendbc.car.volvo.eucd_can import (create_eucd_button_msg, create_eucd_lka_
                                         create_eucd_fsm0, create_eucd_fsm4, create_eucd_radar, create_eucd_cam_brake_level,
                                         create_eucd_cam_brake_status, create_eucd_cam_wheel_status, create_eucd_cam_brake_request_ack,
                                         create_eucd_cam_brake_hold, create_eucd_cam_button, create_eucd_cam_engine_data, create_eucd_resume_button,
-                                        create_eucd_cam_acc_hold, eucd_next_long_mode)
+                                        create_eucd_cam_acc_hold, create_eucd_cam_acc_speed, eucd_next_long_mode)
 from opendbc.car.volvo.eucd_full_stop import EucdFullStop
 from opendbc.car.volvo.eucd_params import CarControllerEUCDParams, LongMode, SteerDirection
 
@@ -42,8 +42,7 @@ class CarControllerEUCD(CarControllerBase):
     self.eucd_accel = 0.0
     self.eucd_cam_brake = False
     self.eucd_cam_brake_honor = False
-    self.eucd_cam_delta_frames = 0  # long frames the camera has braked past OP's by the honor delta
-    self.eucd_cam_mode0_frames = 0  # long frames the camera has been in mode 0
+    self.eucd_show_cam_mode0 = False  # the camera is shown the ECM in mode 0, as it asks
     self.eucd_cam_hard_brake = False  # the camera brakes harder than OP's limit: its FSM3/FSM4 go out unchanged
     self.eucd_spoof_cam_ack = False
     self.eucd_cam_brake_target = 0
@@ -195,14 +194,12 @@ class CarControllerEUCD(CarControllerBase):
       accel, long_mode = 0., LongMode.COAST
       self.eucd_long_mode = LongMode.COAST
       self.eucd_cam_brake_honor = False
-      self.eucd_cam_delta_frames = 0
     elif CC.longActive:
       accel, long_mode = self._eucd_long_decision(CC, CS, cam_accel)
     else:
       accel = cam_accel
       self.eucd_long_mode = LongMode.COAST
       self.eucd_cam_brake_honor = False
-      self.eucd_cam_delta_frames = 0
       long_mode = None
     if self.eucd_full_stop.holding:
       # The car holds the stop: the camera's standstill request (route 807)
@@ -215,6 +212,10 @@ class CarControllerEUCD(CarControllerBase):
 
     self.eucd_spoof_cam_ack = (CC.longActive and self.eucd_cam_brake and not self.eucd_cam_brake_honor and
                                self.eucd_long_mode != LongMode.BRAKE and not self.eucd_full_stop.active)
+    # The camera aborts after 3-6 s in mode 0 with the ECM in another (routes 849-854): shown mode 0 instead
+    self.eucd_show_cam_mode0 = (long_mode is not None and long_mode != LongMode.BRAKE and not self.eucd_full_stop.active and
+                                not self.eucd_full_stop.driver_gas and
+                                int(CS.eucd_stock_FSM3["ACC_Mode"]) == LongMode.BRAKE and not eucd_cam_brake_leftover(CS))
 
     stock_fsm3 = self.eucd_full_stop.fsm3(CS)
     # Within the panda's limit; past it the camera's own frames go out (route 895, 384.3 s)
@@ -238,7 +239,7 @@ class CarControllerEUCD(CarControllerBase):
       ]
     return [
       create_eucd_radar(self.packer, CS.eucd_stock_FSM1),
-      create_eucd_longitudinal(self.packer, stock_fsm3, accel, acc_check, self._eucd_fsm3_mode(CS, long_mode)),
+      create_eucd_longitudinal(self.packer, stock_fsm3, accel, acc_check, long_mode),
     ]
 
   def _eucd_long_decision(self, CC, CS, cam_accel):
@@ -264,26 +265,12 @@ class CarControllerEUCD(CarControllerBase):
   # ---- Camera rules ----
 
   def _eucd_camera_brake(self, accel, cam_accel, leftover=False):
-    """Follow the camera's brake when hard, or well past OP's for a while; latched until it releases or only its leftover brake state is left."""
-    CCP = CarControllerEUCDParams
-    past_op = self.eucd_cam_brake and not leftover and accel - cam_accel > CCP.EUCD_CAMERA_BRAKE_HONOR_DELTA
-    self.eucd_cam_delta_frames = self.eucd_cam_delta_frames + 1 if past_op else 0
-    held = self.eucd_cam_delta_frames * CCP.EUCD_LONG_TX_PERIOD >= CCP.EUCD_CAMERA_BRAKE_HONOR_DELTA_TIME
+    """Follow the camera's emergency brake; latched until it releases or only its leftover brake state is left."""
     if not self.eucd_cam_brake or leftover:
       self.eucd_cam_brake_honor = False
-    elif cam_accel < CCP.EUCD_CAMERA_BRAKE_HONOR_BELOW or held:
+    elif cam_accel < CarControllerEUCDParams.EUCD_CAMERA_BRAKE_HONOR_BELOW:
       self.eucd_cam_brake_honor = True
     return min(accel, cam_accel) if self.eucd_cam_brake_honor else accel
-
-  def _eucd_fsm3_mode(self, CS, long_mode):
-    """FSM3 mode: 0 once the camera has held it past the grace, else OP's (route 28, 590 s)."""
-    cam_mode0 = long_mode is not None and int(CS.eucd_stock_FSM3["ACC_Mode"]) == LongMode.BRAKE and not eucd_cam_brake_leftover(CS)
-    self.eucd_cam_mode0_frames = self.eucd_cam_mode0_frames + 1 if cam_mode0 else 0
-    if long_mode is None:
-      return None
-    if self.eucd_cam_mode0_frames * CarControllerEUCDParams.EUCD_LONG_TX_PERIOD >= CarControllerEUCDParams.EUCD_CAM_MODE0_GRACE:
-      return LongMode.BRAKE
-    return long_mode
 
   @staticmethod
   def _eucd_slope_brake_offset(CC, v_ego=None):
@@ -330,7 +317,9 @@ class CarControllerEUCD(CarControllerBase):
     for stock_engine_data in CS.eucd_stock_EngineData_frames:
       sends.append(create_eucd_cam_engine_data(self.packer, stock_engine_data, cam_standby))
     for stock_acc_hold in CS.eucd_stock_AccHold_frames:
-      sends.append(create_eucd_cam_acc_hold(self.packer, stock_acc_hold, cam_standby))
+      sends.append(create_eucd_cam_acc_hold(self.packer, stock_acc_hold, cam_standby, self.eucd_show_cam_mode0))
+    for stock_acc_speed in CS.eucd_stock_AccSpeed_frames:
+      sends.append(create_eucd_cam_acc_speed(self.packer, stock_acc_speed, self.eucd_show_cam_mode0))
     # CCButtons always relayed (the panda blocks them), with Set held while re-engaging the camera
     set_plus = full_stop.take_cam_set()
     for stock_ccbuttons in CS.eucd_stock_CCButtons_frames:

@@ -208,12 +208,22 @@ def create_eucd_cam_engine_data(packer, stock_engine_data, show_standby: bool):
   return packer.make_can_msg("EngineData", CANBUS.cam, values)
 
 
-def create_eucd_cam_acc_hold(packer, stock_acc_hold, show_standby: bool):
-  # 0x325 to the camera; show_standby: no ACC engaged (C4) nor ACC standstill hold (87), as standby (84)
+def create_eucd_cam_acc_hold(packer, stock_acc_hold, show_standby: bool, show_mode0: bool = False):
+  # 0x325 to the camera; show_standby: no ACC engaged (C4) nor ACC standstill hold (87), as standby (84); b1 bit0 set in mode 0
   values = _eucd_copy(stock_acc_hold)
   if show_standby:
     values |= {"ACC_Engaged": 0, "ACC_StandstillHold": 0}
+  if show_mode0:
+    values["Byte_1"] = int(values["Byte_1"]) | 0x01
   return packer.make_can_msg("AccHold", CANBUS.cam, values)
+
+
+def create_eucd_cam_acc_speed(packer, stock_acc_speed, show_mode0: bool):
+  # 0x167 to the camera; show_mode0: the ECM's torque as in mode 0
+  values = _eucd_copy(stock_acc_speed)
+  if show_mode0:
+    values["ECM_AccTorque"] = min(values["ECM_AccTorque"], CarControllerEUCDParams.EUCD_MODE0_ECM_TORQUE)
+  return packer.make_can_msg("ACC_Speed", CANBUS.cam, values)
 
 
 def create_eucd_cam_brake_hold(packer, stock_brake_hold, frozen_b0: int | None):
