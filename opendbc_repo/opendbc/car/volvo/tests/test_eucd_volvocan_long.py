@@ -100,7 +100,6 @@ def test_mode_hysteresis():
   assert m == LongMode.DRIVE
 
 
-
 def test_brake_enters_earlier_when_slower():
   # Route 22: below 20 km/h the camera brakes from -0.1; coasting there let D creep the car toward the lead
   kph = 1 / 3.6

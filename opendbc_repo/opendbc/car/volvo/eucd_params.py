@@ -92,7 +92,9 @@ class CarControllerEUCDParams:
 
   EUCD_CAM_ACK_RELEASE_VALUE = 13280  # spoofed BrakeReqAck released at this FSM4 target
 
-  # FSM3 mirrors camera mode 0; camera hydraulic brake followed below this
+  # FSM3 mirrors camera mode 0 after this, as it aborts after 3-6 s of a mismatch
+  EUCD_CAM_MODE0_GRACE = 1.5  # s
+  # Camera hydraulic brake followed below this
   EUCD_CAMERA_BRAKE_HONOR_BELOW = EUCD_ACCEL_MIN  # its emergency brake, past OP's (and the panda's) limit
   # ... or when it brakes this much harder than OP for this long, before its 0x10 abort at ~3.4 s (route 1f)
   EUCD_CAMERA_BRAKE_HONOR_DELTA = 1.5  # m/s^2

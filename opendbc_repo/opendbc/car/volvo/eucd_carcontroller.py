@@ -43,6 +43,7 @@ class CarControllerEUCD(CarControllerBase):
     self.eucd_cam_brake = False
     self.eucd_cam_brake_honor = False
     self.eucd_cam_delta_frames = 0  # long frames the camera has braked past OP's by the honor delta
+    self.eucd_cam_mode0_frames = 0  # long frames the camera has been in mode 0
     self.eucd_cam_hard_brake = False  # the camera brakes harder than OP's limit: its FSM3/FSM4 go out unchanged
     self.eucd_spoof_cam_ack = False
     self.eucd_cam_brake_target = 0
@@ -274,12 +275,13 @@ class CarControllerEUCD(CarControllerBase):
       self.eucd_cam_brake_honor = True
     return min(accel, cam_accel) if self.eucd_cam_brake_honor else accel
 
-  @staticmethod
-  def _eucd_fsm3_mode(CS, long_mode):
-    """FSM3 mode: 0 when the camera is in it, else OP's."""
+  def _eucd_fsm3_mode(self, CS, long_mode):
+    """FSM3 mode: 0 once the camera has held it past the grace, else OP's (route 28, 590 s)."""
+    cam_mode0 = long_mode is not None and int(CS.eucd_stock_FSM3["ACC_Mode"]) == LongMode.BRAKE and not eucd_cam_brake_leftover(CS)
+    self.eucd_cam_mode0_frames = self.eucd_cam_mode0_frames + 1 if cam_mode0 else 0
     if long_mode is None:
       return None
-    if int(CS.eucd_stock_FSM3["ACC_Mode"]) == LongMode.BRAKE and not eucd_cam_brake_leftover(CS):
+    if self.eucd_cam_mode0_frames * CarControllerEUCDParams.EUCD_LONG_TX_PERIOD >= CarControllerEUCDParams.EUCD_CAM_MODE0_GRACE:
       return LongMode.BRAKE
     return long_mode
 

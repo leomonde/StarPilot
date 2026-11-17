@@ -18,6 +18,7 @@ def controller(cam_brake=False):
   cc.eucd_cam_brake = cam_brake
   cc.eucd_cam_brake_honor = False
   cc.eucd_cam_delta_frames = 0
+  cc.eucd_cam_mode0_frames = 0
   return cc
 
 
@@ -89,21 +90,39 @@ def fsm3(mode, distance=50, cam_accel=-1.0):
   return SimpleNamespace(eucd_stock_FSM3={"ACC_Mode": mode, "ACC_AccelerationRequest": cam_accel}, eucd_acc_distance=distance)
 
 
+GRACE_FRAMES = round(CCP.EUCD_CAM_MODE0_GRACE / CCP.EUCD_LONG_TX_PERIOD)
+
+
+def run_mode(cs, op_mode, frames):
+  cc = controller()
+  return [cc._eucd_fsm3_mode(cs, op_mode) for _ in range(frames)]
+
+
 @pytest.mark.parametrize("op_mode", [LongMode.COAST, LongMode.DRIVE])
 def test_fsm3_leaves_the_camera_brake_leftover(op_mode):
-  assert CarController._eucd_fsm3_mode(fsm3(LongMode.BRAKE, distance=255, cam_accel=0.96), op_mode) == op_mode
-  assert CarController._eucd_fsm3_mode(fsm3(LongMode.BRAKE, distance=255, cam_accel=-0.5), op_mode) == LongMode.BRAKE
+  assert set(run_mode(fsm3(LongMode.BRAKE, distance=255, cam_accel=0.96), op_mode, 2 * GRACE_FRAMES)) == {op_mode}
+  assert run_mode(fsm3(LongMode.BRAKE, distance=255, cam_accel=-0.5), op_mode, GRACE_FRAMES)[-1] == LongMode.BRAKE
 
 
-@pytest.mark.parametrize("op_mode", [LongMode.BRAKE, LongMode.COAST, LongMode.DRIVE])
-def test_fsm3_mirrors_camera_mode_0(op_mode):
-  assert CarController._eucd_fsm3_mode(fsm3(LongMode.BRAKE), op_mode) == LongMode.BRAKE
+@pytest.mark.parametrize("op_mode", [LongMode.COAST, LongMode.DRIVE])
+def test_fsm3_mirrors_camera_mode_0_after_the_grace(op_mode):
+  # Route 28, 590 s: the camera's ~1.2 s mode 0 behind a close lead cut the traction on a climb
+  modes = run_mode(fsm3(LongMode.BRAKE), op_mode, GRACE_FRAMES)
+  assert set(modes[:-1]) == {op_mode} and modes[-1] == LongMode.BRAKE
+
+
+def test_fsm3_grace_restarts_when_the_camera_leaves_mode_0():
+  cc = controller()
+  for _ in range(GRACE_FRAMES - 1):
+    cc._eucd_fsm3_mode(fsm3(LongMode.BRAKE), LongMode.DRIVE)
+  cc._eucd_fsm3_mode(fsm3(LongMode.COAST), LongMode.DRIVE)
+  assert cc._eucd_fsm3_mode(fsm3(LongMode.BRAKE), LongMode.DRIVE) == LongMode.DRIVE
 
 
 @pytest.mark.parametrize("cam_mode", [LongMode.COAST, LongMode.DRIVE])
 @pytest.mark.parametrize("op_mode", [LongMode.BRAKE, LongMode.COAST, LongMode.DRIVE])
 def test_fsm3_keeps_op_mode_otherwise(cam_mode, op_mode):
-  assert CarController._eucd_fsm3_mode(fsm3(cam_mode), op_mode) == op_mode
+  assert set(run_mode(fsm3(cam_mode), op_mode, 2 * GRACE_FRAMES)) == {op_mode}
 
 
 def test_traction_continuous_at_drive_switch():
@@ -115,7 +134,7 @@ def test_traction_continuous_at_drive_switch():
 
 
 def test_fsm3_untouched_without_op_mode():
-  assert CarController._eucd_fsm3_mode(fsm3(LongMode.BRAKE), None) is None
+  assert controller()._eucd_fsm3_mode(fsm3(LongMode.BRAKE), None) is None
 
 
 def offset(pitch_deg):
