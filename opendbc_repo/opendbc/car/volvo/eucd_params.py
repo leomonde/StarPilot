@@ -94,6 +94,12 @@ class CarControllerEUCDParams:
 
   EUCD_CAM_ACK_RELEASE_VALUE = 13280  # spoofed BrakeReqAck released at this FSM4 target
 
+  # Brake feedback shown to the camera for its FSM4 target, as the car's under stock ACC (routes 807/808)
+  EUCD_CAM_FEEDBACK_TARGET_BP = [12443, 12700, 12800, 12900, 13000, 13100, 13200, 13250, 13300]
+  EUCD_CAM_FEEDBACK_PRESSURE_V = [190, 112, 80, 68, 40, 30, 24, 20, 0]  # Brake_Info BrakePressure
+  EUCD_CAM_FEEDBACK_LEVEL_V = [78, 70, 62, 58, 52, 52, 50, 47, 45]  # BrakeLevel
+  EUCD_CAM_FEEDBACK_APPLIED_PRESSURE = 20  # BrakeStatus BrakeApplied shown from this pressure
+
   # ECM torque shown to the camera in its mode 0 (0x167, ~-6 in mode 0, 150-350 in traction)
   EUCD_MODE0_ECM_TORQUE = -6
   # Camera hydraulic brake followed below this

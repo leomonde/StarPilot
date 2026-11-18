@@ -294,3 +294,37 @@ def test_acc_hold_shows_mode0():
   assert volvocan.create_eucd_cam_acc_hold(packer, parse("AccHold", 0x325, 25, stock), False)[1] == stock
   out = volvocan.create_eucd_cam_acc_hold(packer, parse("AccHold", 0x325, 25, stock), False, show_mode0=True)[1]
   assert out == stock[:1] + bytes([0xab]) + stock[2:]
+
+
+STOCK_BRAKE_INFO = "ff049400b2670000"  # route 2d, no brake, pedal released
+
+
+def brake_info(stock, pressure):
+  return volvocan.create_eucd_cam_brake_info(CANPacker(DBC), parse("Brake_Info", 0x20A, 50, bytes.fromhex(stock)), pressure)[1]
+
+
+def test_brake_feedback_relayed_unchanged_without_camera_brake():
+  stock = bytes.fromhex(STOCK_BRAKE_INFO)
+  assert brake_info(STOCK_BRAKE_INFO, 0) == stock
+
+
+def test_brake_feedback_follows_the_camera_target():
+  # Route 2d, 826 s: the camera asked ~13000 and saw no pressure, then aborted
+  pressure, level = volvocan.eucd_cam_brake_feedback(13000)
+  assert pressure == 40 and level == 52
+  assert volvocan.eucd_cam_brake_feedback(13300) == (0, 45)
+  out = brake_info(STOCK_BRAKE_INFO, pressure)
+  stock = bytes.fromhex(STOCK_BRAKE_INFO)
+  assert (((out[2] & 0x3) << 8) | out[3]) == pressure and (out[1] >> 5) & 1
+  assert out[1] & 0x0F == stock[1] & 0x0F and out[4] == stock[4]  # counter and checksum kept
+  assert (out[2] >> 2) & 0x3 == (stock[2] >> 2) & 0x3  # driver's brake pedal kept
+
+
+def test_brake_level_and_status_feedback():
+  packer = CANPacker(DBC)
+  level = bytes.fromhex("0b146e3cce370719")
+  out = volvocan.create_eucd_cam_brake_level(packer, parse("BrakeLevel", 0x133, 50, level), 60)[1]
+  assert out[1] & 0x7F == 60 and out[0] == level[0] and out[2:] == level[2:]
+  status = bytes.fromhex("0000fc04c5800400")
+  assert volvocan.create_eucd_cam_brake_status(packer, parse("BrakeStatus", 0x323, 25, status), False)[1] == status
+  assert volvocan.create_eucd_cam_brake_status(packer, parse("BrakeStatus", 0x323, 25, status), True)[1][4] == 0xD5

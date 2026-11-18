@@ -148,6 +148,39 @@ def create_eucd_fsm0(packer, stock_fsm0, ecm_engaged: bool):
   return packer.make_can_msg("FSM0", 0, values)
 
 
+def eucd_cam_brake_feedback(target: int) -> tuple[int, int]:
+  """Brake pressure and level the car shows under stock ACC for this camera FSM4 target."""
+  CCP = CarControllerEUCDParams
+  bp = CCP.EUCD_CAM_FEEDBACK_TARGET_BP
+  return (int(round(float(np.interp(target, bp, CCP.EUCD_CAM_FEEDBACK_PRESSURE_V)))),
+          int(round(float(np.interp(target, bp, CCP.EUCD_CAM_FEEDBACK_LEVEL_V)))))
+
+
+def create_eucd_cam_brake_info(packer, stock_brake_info, pressure: int | None = None):
+  # Brake_Info to the camera; pressure: at least this, with the ACC brake command, as the camera's brake would get
+  values = _eucd_copy(stock_brake_info)
+  if pressure:
+    values["BrakePressure"] = max(int(values["BrakePressure"]), pressure)
+    values["BrakeCmd"] = 1
+  return packer.make_can_msg("Brake_Info", CANBUS.cam, values)
+
+
+def create_eucd_cam_brake_level(packer, stock_brake_level, level: int | None = None):
+  # BrakeLevel to the camera; level: at least this
+  values = _eucd_copy(stock_brake_level)
+  if level is not None:
+    values["BrakeLevel"] = max(int(values["BrakeLevel"]), level)
+  return packer.make_can_msg("BrakeLevel", CANBUS.cam, values)
+
+
+def create_eucd_cam_brake_status(packer, stock_brake_status, applied: bool = False):
+  # BrakeStatus to the camera; applied: brake applied shown
+  values = _eucd_copy(stock_brake_status)
+  if applied:
+    values["BrakeApplied"] = 1
+  return packer.make_can_msg("BrakeStatus", CANBUS.cam, values)
+
+
 def create_eucd_cam_wheel_status(packer, stock_wheelspeed1, mask: bool, spoof: bool = False, hide_hold: bool = False,
                                  show_standby: bool = False):
   # wheelspeed1 to the camera: brake request masked or spoofed, standstill hold and standby-view ACC brake hidden
