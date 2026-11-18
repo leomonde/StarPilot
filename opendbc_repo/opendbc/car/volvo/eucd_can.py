@@ -146,16 +146,6 @@ def create_eucd_fsm0(packer, stock_fsm0, ecm_engaged: bool):
   return packer.make_can_msg("FSM0", 0, values)
 
 
-def create_eucd_cam_brake_status(packer, stock_brake_status):
-  # BrakeStatus to the camera, unchanged (the panda blocks it)
-  return packer.make_can_msg("BrakeStatus", CANBUS.cam, _eucd_copy(stock_brake_status))
-
-
-def create_eucd_cam_brake_level(packer, stock_brake_level):
-  # BrakeLevel to the camera, unchanged (the panda blocks it)
-  return packer.make_can_msg("BrakeLevel", CANBUS.cam, _eucd_copy(stock_brake_level))
-
-
 def create_eucd_cam_wheel_status(packer, stock_wheelspeed1, mask: bool, spoof: bool = False, hide_hold: bool = False,
                                  show_standby: bool = False):
   # wheelspeed1 to the camera: brake request masked or spoofed, standstill hold and standby-view ACC brake hidden

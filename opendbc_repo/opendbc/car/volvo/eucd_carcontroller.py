@@ -6,8 +6,7 @@ from opendbc.car import Bus, DT_CTRL
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.lateral import apply_std_steer_angle_limits
 from opendbc.car.volvo.eucd_can import (create_eucd_button_msg, create_eucd_lka_msg, create_eucd_lkas_state_msg, create_eucd_longitudinal,
-                                        create_eucd_fsm0, create_eucd_fsm4, create_eucd_radar, create_eucd_cam_brake_level,
-                                        create_eucd_cam_brake_status, create_eucd_cam_wheel_status, create_eucd_cam_brake_request_ack,
+                                        create_eucd_fsm0, create_eucd_fsm4, create_eucd_radar, create_eucd_cam_wheel_status, create_eucd_cam_brake_request_ack,
                                         create_eucd_cam_brake_hold, create_eucd_cam_button, create_eucd_cam_engine_data, create_eucd_resume_button,
                                         create_eucd_cam_acc_hold, create_eucd_cam_acc_speed, eucd_next_long_mode)
 from opendbc.car.volvo.eucd_full_stop import EucdFullStop
@@ -226,6 +225,8 @@ class CarControllerEUCD(CarControllerBase):
     else:
       acc_check = int(stock_fsm3["ACC_Check"])
 
+    if not CS.eucd_ecm_acc_engaged and not self.eucd_full_stop.active:
+      return []  # ECM off: the panda forwards the camera's FSM1/FSM3, a copy would be duplicated or blocked (route 2c, 837 s)
     if self.eucd_full_stop.active:
       # OP's mode as is (the template's mode is stale), standstill from OP, camera cancel masked
       return [
@@ -304,10 +305,6 @@ class CarControllerEUCD(CarControllerBase):
     cam_standby = full_stop.show_cam_standby
 
     sends = []
-    for stock_brake_level in CS.eucd_stock_BrakeLevel_frames:
-      sends.append(create_eucd_cam_brake_level(self.packer, stock_brake_level))
-    for stock_brake_status in CS.eucd_stock_BrakeStatus_frames:
-      sends.append(create_eucd_cam_brake_status(self.packer, stock_brake_status))
     for stock_wheelspeed1 in CS.eucd_stock_wheelspeed1_frames:
       sends.append(create_eucd_cam_wheel_status(self.packer, stock_wheelspeed1, mask, self.eucd_spoof_cam_ack, hide_hold=mask,
                                                  show_standby=cam_standby))

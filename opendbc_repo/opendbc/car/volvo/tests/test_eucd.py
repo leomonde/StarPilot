@@ -34,7 +34,7 @@ def required_frames(**overrides):
     "EngineData": {"ACC_State_ECM": EcmAccState.ENGAGED},
     "CCButtons": {},
     "GearSelector": {"GearLever": 3},
-    "BrakeLevel": {}, "BrakeStatus": {}, "wheelspeed1": {}, "BrakeReqAck": {}, "BrakeHold": {}, "AccHold": {},
+    "wheelspeed1": {}, "BrakeReqAck": {}, "BrakeHold": {}, "AccHold": {},
   }
   cam_values = {"FSM0": {"ACC_Available": 1}, "FSM1": {}, "FSM3": {"ACC_Standstill": 0}, "FSM4": {}, "FSM5": {"TSR_Speed": 0}}
   for name, signals in overrides.items():
@@ -145,7 +145,7 @@ def controller_state(speed=20., angle=0., brake=False):
   cs.eucd_driver_resume = False
   cs.eucd_stock_FSM1 = {"ACC_Braking": 0}
   cs.eucd_stock_FSM3 = {"ACC_AccelerationRequest": 0., "ACC_Mode": 1, "ACC_NoTargetCancel": 0, "Byte_6": 0, "FrameKind": 0x81, "ACC_Check": 0}
-  for name in ("FSM0", "FSM4", "BrakeLevel", "BrakeStatus", "wheelspeed1", "BrakeReqAck", "BrakeHold", "EngineData", "AccHold", "AccSpeed", "CCButtons"):
+  for name in ("FSM0", "FSM4", "wheelspeed1", "BrakeReqAck", "BrakeHold", "EngineData", "AccHold", "AccSpeed", "CCButtons"):
     setattr(cs, f"eucd_stock_{name}_frames", [])
   return cs
 
@@ -291,11 +291,22 @@ def test_longitudinal_tx_is_50hz_and_keeps_the_relays():
   cc = controller()
   cs = controller_state()
   cs.eucd_stock_CCButtons_frames = [{"ACCResumeBtn": 0, "ACCResumeBtnInv": 1, "ACCSetBtn": 0, "ACCSetBtnInv": 1}]
+  cs.eucd_ecm_acc_engaged = True
   sent = []
   for i in range(10):
     sent += [s[0] for s in cc.update(control(False), cs, i * 10_000_000)[1]]
   assert sent.count(0x270) == sent.count(0x260) == 5  # FSM3, FSM1
   assert sent.count(0x127) == 10  # CEM frames relayed to the camera
+
+
+def test_no_fsm1_fsm3_with_the_ecm_off():
+  # Route 2c, 837 s: with the ECM off the panda forwards the camera's frames and blocked OP's copies
+  cc = controller()
+  cs = controller_state()
+  sent = []
+  for i in range(10):
+    sent += [s[0] for s in cc.update(control(False), cs, i * 10_000_000)[1]]
+  assert 0x270 not in sent and 0x260 not in sent
 
 
 def test_lka_press_events(car):

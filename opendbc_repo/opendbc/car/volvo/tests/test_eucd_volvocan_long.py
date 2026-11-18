@@ -188,25 +188,6 @@ def test_fsm1_brake_bit_follows_op(stock, mode):
   assert out[:2] == stock[:2] and out[3:] == stock[3:]
 
 
-BRAKE_STATUS_ADDR = 0x323
-BRAKE_LEVEL_ADDR = 0x133
-# Stock BrakeStatus and BrakeLevel frames, route 807
-STOCK_BRAKE_STATUS = ["0000fc04c5800400", "0000fc04d5800400", "0000fc04e5800400"]
-STOCK_BRAKE_LEVEL = ["0b146e3cce370719", "0b2d6df6cdf60732"]
-
-
-@pytest.mark.parametrize("stock", [bytes.fromhex(h) for h in STOCK_BRAKE_STATUS])
-def test_brake_status_relay_to_camera(stock):
-  addr, dat, bus = volvocan.create_eucd_cam_brake_status(CANPacker(DBC), parse("BrakeStatus", BRAKE_STATUS_ADDR, 25, stock))
-  assert (addr, dat, bus) == (BRAKE_STATUS_ADDR, stock, 2)
-
-
-@pytest.mark.parametrize("stock", [bytes.fromhex(h) for h in STOCK_BRAKE_LEVEL])
-def test_brake_level_relay_to_camera(stock):
-  addr, dat, bus = volvocan.create_eucd_cam_brake_level(CANPacker(DBC), parse("BrakeLevel", BRAKE_LEVEL_ADDR, 50, stock))
-  assert (addr, dat, bus) == (BRAKE_LEVEL_ADDR, stock, 2)
-
-
 WHEELSPEED1_ADDR = 0x220
 BRAKE_REQ_ACK_ADDR = 0x299
 # Stock wheelspeed1 and BrakeReqAck frames, route 816
