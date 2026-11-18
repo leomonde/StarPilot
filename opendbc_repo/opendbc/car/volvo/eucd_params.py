@@ -50,6 +50,7 @@ class CarControllerEUCDParams:
   EUCD_HOLD_RELEASE_FRAMES = int(0.05 / DT_CTRL)  # brake request released after the car's hold
   EUCD_STANDSTILL_DELAY = 3.0  # s stopped before FSM3 ACC_Standstill
   EUCD_HOLD_ACCEL = -0.08  # m/s^2, FSM3 accel while the car holds (raw 0x7C)
+  EUCD_STOPPING_ACCEL = -0.64  # m/s^2, at most while stopping, as the camera from its F9 to the car's hold (route 807)
   EUCD_GO_RETRY_TIME = 2.0  # s still stopped after the resume burst -> standstill again, retry
   EUCD_ECM_READY_TIMEOUT = 3.0  # s after FSM3 ACC_Standstill: resume sent even without the ECM's ready (seen 1.5 s)
   # Camera shown ACC standby for the whole stop, re-engaged like on the driver's Set: Set, then EngineData 30 ms later

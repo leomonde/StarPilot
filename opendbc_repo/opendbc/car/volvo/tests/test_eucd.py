@@ -7,7 +7,7 @@ from opendbc.car.dashboard_speed_limit import Status
 from opendbc.car.volvo.eucd_can import calculate_eucd_lka_checksum, create_eucd_lka_msg
 from opendbc.car.volvo.eucd_carcontroller import CarControllerEUCD
 from opendbc.car.volvo.eucd_carstate import CarStateEUCD
-from opendbc.car.volvo.eucd_params import EcmAccState
+from opendbc.car.volvo.eucd_params import CarControllerEUCDParams, EcmAccState
 from opendbc.car.volvo.interface import CarInterface
 from opendbc.car.volvo.values import CAR, DBC, VolvoSafetyFlags
 
@@ -336,3 +336,21 @@ def test_radar_publishes_an_esr_track():
   assert point.dRel == pytest.approx(40., abs=0.1)
   assert point.yRel == pytest.approx(0., abs=0.1)
   assert point.vRel == pytest.approx(-2., abs=0.01)
+
+
+def test_stopping_keeps_the_camera_brake():
+  # Route 2e, 59 s: the planner's -0.15 at the stopping flag dropped the brake to 0 and the car rolled on a climb
+  cc = controller()
+  cs = controller_state(speed=0.5)
+  cs.eucd_ecm_acc_engaged = True
+  fs = cc.eucd_full_stop
+  fs.active = fs.cam_standby = True
+  fs.tpl_fsm3 = {"data": dict(cs.eucd_stock_FSM3), "type": {**cs.eucd_stock_FSM3, "FrameKind": 0}}
+  fs.tpl_fsm4 = {"Byte_0": 0x55, "ACC_BrakeRequest": 0, "ACC_BrakeTarget": 13332, "Byte_5_b7": 1}
+  fs.tpl_fsm0 = {0: {"Byte_0": 0, "ACC_AbortCode": 0, "ACC_Enabled": 1}}
+  CC = structs.CarControl(enabled=True, latActive=False, longActive=True)
+  CC.actuators.accel = -0.15
+  sends = cc.update(CC.as_reader(), cs, 0)[1]
+  fsm3 = next(s[1] for s in sends if s[0] == 0x270)
+  assert fs.stopping and fsm3[2] & 0x3 == 0  # BRAKE
+  assert fsm3[1] == round((CarControllerEUCDParams.EUCD_STOPPING_ACCEL + 5.04) / 0.04)

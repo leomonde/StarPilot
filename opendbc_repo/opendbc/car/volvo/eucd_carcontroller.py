@@ -204,6 +204,10 @@ class CarControllerEUCD(CarControllerBase):
       # The car holds the stop: the camera's standstill request (route 807)
       accel = CarControllerEUCDParams.EUCD_HOLD_ACCEL
       long_mode = self.eucd_long_mode = LongMode.BRAKE
+    elif self.eucd_full_stop.stopping and long_mode is not None:
+      # Stopping flag on: at least the camera's brake, or it drops to 0 and the car rolls on (route 2e, 59 s)
+      accel = min(accel, CarControllerEUCDParams.EUCD_STOPPING_ACCEL)
+      long_mode = self.eucd_long_mode = LongMode.BRAKE
     self.eucd_accel = accel
     # The panda only lets the camera's own frames past OP's limit, so they go out unchanged
     self.eucd_cam_hard_brake = (CC.longActive and self.eucd_cam_brake_honor and not self.eucd_full_stop.active and
