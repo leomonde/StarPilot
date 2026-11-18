@@ -34,7 +34,7 @@ def required_frames(**overrides):
     "EngineData": {"ACC_State_ECM": EcmAccState.ENGAGED},
     "CCButtons": {},
     "GearSelector": {"GearLever": 3},
-    "BrakeLevel": {}, "BrakeStatus": {}, "wheelspeed1": {}, "BrakeReqAck": {}, "BrakeHold": {}, "AccHold": {},
+    "wheelspeed1": {}, "BrakeReqAck": {}, "BrakeHold": {}, "AccHold": {},
   }
   cam_values = {"FSM0": {"ACC_Available": 1}, "FSM1": {}, "FSM3": {"ACC_Standstill": 0}, "FSM4": {}, "FSM5": {"TSR_Speed": 0}}
   for name, signals in overrides.items():
@@ -145,8 +145,7 @@ def controller_state(speed=20., angle=0., brake=False):
   cs.eucd_driver_resume = False
   cs.eucd_stock_FSM1 = {"ACC_Braking": 0}
   cs.eucd_stock_FSM3 = {"ACC_AccelerationRequest": 0., "ACC_Mode": 1, "ACC_NoTargetCancel": 0, "Byte_6": 0, "FrameKind": 0x81, "ACC_Check": 0}
-  for name in ("FSM0", "FSM4", "BrakeInfo", "BrakeLevel", "BrakeStatus", "wheelspeed1", "BrakeReqAck", "BrakeHold", "EngineData", "AccHold",
-               "AccSpeed", "CCButtons"):
+  for name in ("FSM0", "FSM4", "wheelspeed1", "BrakeReqAck", "BrakeHold", "EngineData", "AccHold", "CCButtons"):
     setattr(cs, f"eucd_stock_{name}_frames", [])
   return cs
 
@@ -344,14 +343,13 @@ def test_stopping_keeps_the_camera_brake():
   cc = controller()
   cs = controller_state(speed=0.5)
   cs.eucd_ecm_acc_engaged = True
-  fs = cc.eucd_full_stop
-  fs.active = fs.cam_standby = True
-  fs.tpl_fsm3 = {"data": dict(cs.eucd_stock_FSM3), "type": {**cs.eucd_stock_FSM3, "FrameKind": 0}}
-  fs.tpl_fsm4 = {"Byte_0": 0x55, "ACC_BrakeRequest": 0, "ACC_BrakeTarget": 13332, "Byte_5_b7": 1}
-  fs.tpl_fsm0 = {0: {"Byte_0": 0, "ACC_AbortCode": 0, "ACC_Enabled": 1}}
+  cc.eucd_own = True
+  cc.eucd_tpl_fsm3 = {"data": dict(cs.eucd_stock_FSM3), "type": {**cs.eucd_stock_FSM3, "FrameKind": 0}}
+  cc.eucd_tpl_fsm4 = {"Byte_0": 0x55, "ACC_BrakeRequest": 0, "ACC_BrakeTarget": 13332, "Byte_5_b7": 1}
+  cc.eucd_tpl_fsm0 = {0: {"Byte_0": 0, "ACC_AbortCode": 0, "ACC_Enabled": 1}}
   CC = structs.CarControl(enabled=True, latActive=False, longActive=True)
   CC.actuators.accel = -0.15
   sends = cc.update(CC.as_reader(), cs, 0)[1]
   fsm3 = next(s[1] for s in sends if s[0] == 0x270)
-  assert fs.stopping and fsm3[2] & 0x3 == 0  # BRAKE
+  assert cc.eucd_stopping and fsm3[2] & 0x3 == 0  # BRAKE
   assert fsm3[1] == round((CarControllerEUCDParams.EUCD_STOPPING_ACCEL + 5.04) / 0.04)

@@ -29,9 +29,9 @@ class CarStateEUCD(CarStateBase):
     self.eucd_gap_button_states = {"TimeGapIncreaseBtn": False, "TimeGapDecreaseBtn": False}
     self.eucd_driver_onoff = False  # driver's ACC On/Off held (bit set, inverted copy cleared)
     self.eucd_driver_resume = False  # driver's Resume held (bit set, inverted copy cleared)
-    # Set by the carcontroller: OP's stop to 0 owns the ACC standstill
-    self.eucd_full_stop_active = False
-    self.eucd_full_stop_standstill = False
+    # Set by the carcontroller: while OP owns the ECM, the ACC standstill is OP's
+    self.eucd_op_owns_ecm = False
+    self.eucd_op_standstill = False
     self.eucd_ecm_standstill_ready = False
     self.eucd_lka_on = False  # the driver's LKA on/off, always on lateral follows it
     self.eucd_gas_pressed = False
@@ -74,9 +74,9 @@ class CarStateEUCD(CarStateBase):
     # ECM is the ACC master
     self.eucd_ecm_acc_engaged = int(pt_cp.vl["EngineData"]["ACC_State_ECM"]) == EcmAccState.ENGAGED
     ret.cruiseState.enabled = self.eucd_ecm_acc_engaged
-    # Camera standstill hold, gated by the car's standstill; OP's own in its stop to 0
-    if self.eucd_full_stop_active:
-      ret.cruiseState.standstill = self.eucd_full_stop_standstill and ret.standstill
+    # Camera standstill hold, gated by the car's standstill; OP's own while it owns the ECM
+    if self.eucd_op_owns_ecm:
+      ret.cruiseState.standstill = self.eucd_op_standstill and ret.standstill
     else:
       ret.cruiseState.standstill = bool(cam_cp.vl["FSM3"]["ACC_Standstill"]) and ret.standstill
     # The car holds the stop (BrakeReqAck b0 bit7, route 807)
@@ -174,10 +174,6 @@ class CarStateEUCD(CarStateBase):
     self.eucd_stock_BrakeHold_frames = eucd_all_frames(pt_cp, "BrakeHold")
     self.eucd_stock_EngineData_frames = eucd_all_frames(pt_cp, "EngineData")
     self.eucd_stock_AccHold_frames = eucd_all_frames(pt_cp, "AccHold")
-    self.eucd_stock_AccSpeed_frames = eucd_all_frames(pt_cp, "ACC_Speed")
-    self.eucd_stock_BrakeInfo_frames = eucd_all_frames(pt_cp, "Brake_Info")
-    self.eucd_stock_BrakeLevel_frames = eucd_all_frames(pt_cp, "BrakeLevel")
-    self.eucd_stock_BrakeStatus_frames = eucd_all_frames(pt_cp, "BrakeStatus")
     self.eucd_stock_CCButtons_frames = eucd_all_frames(pt_cp, "CCButtons")
 
     # TSR speed limit, 0 = no sign
@@ -204,8 +200,6 @@ class CarStateEUCD(CarStateBase):
       ("GearSelector", 66),
       ("wheelspeed1", 50),
       ("BrakeReqAck", 50),
-      ("BrakeLevel", 50),
-      ("BrakeStatus", 25),
       ("BrakeHold", 50),
       ("AccHold", 25),
     ]

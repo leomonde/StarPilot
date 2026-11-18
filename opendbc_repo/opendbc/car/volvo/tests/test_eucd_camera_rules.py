@@ -3,71 +3,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from opendbc.car import DT_CTRL
+from opendbc.car import Bus, DT_CTRL
+from opendbc.car.volvo.interface import CarInterface
+from opendbc.car.volvo.values import CAR
 from opendbc.car.volvo.eucd_carcontroller import CarControllerEUCD as CarController
 from opendbc.car.volvo.eucd_params import CarControllerEUCDParams as CarControllerParams, LongMode
 from opendbc.car.volvo import eucd_can as volvocan
 from opendbc.car.volvo.eucd_can import eucd_next_long_mode
 
 CCP = CarControllerParams
-HARD = CCP.EUCD_CAMERA_BRAKE_HONOR_BELOW - 0.5
-
-
-def controller(cam_brake=False):
-  cc = CarController.__new__(CarController)
-  cc.eucd_cam_brake = cam_brake
-  cc.eucd_cam_brake_honor = False
-  return cc
-
-
-def test_hard_camera_brake_followed_at_once_and_latched():
-  cc = controller(cam_brake=True)
-  assert cc._eucd_camera_brake(0.1, HARD) == HARD
-  assert cc._eucd_camera_brake(0.1, -1.0) == -1.0  # latched while the camera brakes
-  cc.eucd_cam_brake = False
-  assert cc._eucd_camera_brake(0.1, -1.0) == 0.1   # released with the camera's brake
-
-
-def test_mild_camera_brake_ignored():
-  cc = controller(cam_brake=True)
-  assert cc._eucd_camera_brake(0.1, -1.0) == 0.1
-  assert cc._eucd_camera_brake(-0.75, -3.4) == -0.75  # above the emergency limit: still OP's
-  assert not cc.eucd_cam_brake_honor
-
-
-def test_camera_brake_past_ops_is_left_to_op():
-  # Route 1f: cut-in, camera -2.56 vs OP +0.09 (665.4 s): only the emergency brake is the camera's
-  cc = controller(cam_brake=True)
-  for _ in range(500):
-    assert cc._eucd_camera_brake(0.09, -2.56) == 0.09
-  assert not cc.eucd_cam_brake_honor
-
-
-def test_hard_camera_brake_needs_no_hold():
-  cc = controller(cam_brake=True)
-  assert cc._eucd_camera_brake(0.0, HARD) == HARD
-
-
-def test_camera_emergency_needs_its_brake_request():
-  cc = controller(cam_brake=False)
-  assert cc._eucd_camera_brake(0.5, HARD) == 0.5
-  assert not cc.eucd_cam_brake_honor
-
-
-def test_camera_brake_released_when_only_its_leftover_is_left():
-  cc = controller(cam_brake=True)
-  assert cc._eucd_camera_brake(0.1, HARD) == HARD
-  assert cc._eucd_camera_brake(1.9, 0.96, leftover=True) == 1.9  # target gone, camera asks no brake (route 8bd)
-  assert not cc.eucd_cam_brake_honor
-
-
-def test_op_braking_more_is_never_limited():
-  cc = controller(cam_brake=True)
-  assert cc._eucd_camera_brake(HARD - 0.5, HARD) == HARD - 0.5
-
-
-def fsm3(mode, distance=50, cam_accel=-1.0):
-  return SimpleNamespace(eucd_stock_FSM3={"ACC_Mode": mode, "ACC_AccelerationRequest": cam_accel}, eucd_acc_distance=distance)
 
 
 def test_traction_continuous_at_drive_switch():
@@ -142,101 +86,135 @@ def test_jerk_limit_reaches_target():
   assert a == -0.4
 
 
-def test_fsm3_template_never_keeps_the_camera_ack():
+def owner():
+  cc = CarController({Bus.pt: "volvo_v60_2015_pt"}, CarInterface.get_non_essential_params(CAR.VOLVO_V60))
+  return cc
+
+
+def car(engaged=True, cam_enabled=1, v=0., standstill=True, hold=False, gas=False):
+  return SimpleNamespace(eucd_ecm_acc_engaged=engaged, eucd_car_hold=hold, eucd_ecm_standstill_ready=False,
+                         eucd_stock_FSM3={"ACC_NoTargetCancel": 0, "Byte_6": 0, "FrameKind": 0x81, "ACC_Check": 0},
+                         eucd_stock_FSM0_frames=[{"Byte_0": 0, "ACC_AbortCode": 0, "ACC_Enabled": cam_enabled}],
+                         eucd_stock_FSM4_frames=[{"Byte_2": 0, "Byte_0": 0x55, "ACC_BrakeRequest": 0}],
+                         out=SimpleNamespace(vEgo=v, standstill=standstill, gasPressed=gas))
+
+
+def control(long_active=True, accel=-1.):
+  return SimpleNamespace(enabled=long_active, longActive=long_active, actuators=SimpleNamespace(accel=accel))
+
+
+def owning(cc, CS, CC):
+  """Templates seen (data and type frames), then OP owns the ECM."""
+  for kind in (0x81, 0):
+    CS.eucd_stock_FSM3 = {**CS.eucd_stock_FSM3, "FrameKind": kind}
+    cc._eucd_ownership(CC, CS)
+  CS.eucd_stock_FSM3 = {**CS.eucd_stock_FSM3, "FrameKind": 0x81}
+  assert cc.eucd_own
+
+
+def test_template_never_keeps_the_camera_ack():
   """The camera's ACC_Check (engaging at standstill) left in the template made the ECM brake in the drive-off (8a3)."""
-  from opendbc.car.volvo.eucd_full_stop import EucdFullStop
-  fs = EucdFullStop()
-  cam_fsm3 = {"ACC_NoTargetCancel": 0, "Byte_6": 0, "FrameKind": 0x81, "ACC_Check": 1}
-  CS = SimpleNamespace(eucd_ecm_acc_engaged=True, eucd_stock_FSM3=cam_fsm3,
-                       eucd_stock_FSM0_frames=[{"Byte_0": 0, "ACC_AbortCode": 0, "ACC_Enabled": 1}],
-                       eucd_stock_FSM4_frames=[{"Byte_2": 0}], out=SimpleNamespace(vEgo=0.))
-  fs.update(SimpleNamespace(longActive=False), CS)
-  assert fs.tpl_fsm3["data"]["ACC_Check"] == 0
-  assert cam_fsm3["ACC_Check"] == 1  # the camera's frame untouched
+  cc, CS = owner(), car()
+  CS.eucd_stock_FSM3["ACC_Check"] = 1
+  cc._eucd_ownership(control(long_active=False), CS)
+  assert cc.eucd_tpl_fsm3["data"]["ACC_Check"] == 0
+  assert CS.eucd_stock_FSM3["ACC_Check"] == 1  # the camera's frame untouched
 
 
-def stopped_full_stop(seconds=3.):
+def test_op_owns_the_ecm_at_highway_speed():
+  # The camera's ACC shown standby whenever OP's long is on, so it never disagrees with OP (routes 1f, 2d)
+  cc, CS, CC = owner(), car(v=30., standstill=False), control(accel=0.5)
+  owning(cc, CS, CC)
+  CS.eucd_stock_FSM0_frames = [{"Byte_0": 0, "ACC_AbortCode": 0, "ACC_Enabled": 0}]  # the camera in standby
+  for _ in range(int(5. / DT_CTRL)):
+    cc._eucd_ownership(CC, CS)
+  assert cc.eucd_own and not cc.eucd_stopping
+  CC.longActive = CC.enabled = False
+  cc._eucd_ownership(CC, CS)
+  assert not cc.eucd_own and cc.eucd_exit_standby_frames == 1  # standby until the ECM drops
+
+
+def test_no_ownership_before_the_templates():
+  cc, CS = owner(), car(cam_enabled=0)  # the camera not engaged yet: nothing clean to replay
+  cc._eucd_ownership(control(), CS)
+  assert not cc.eucd_own
+
+
+def stopped(seconds=3.):
   """OP's stop at standstill, the car holding."""
-  from opendbc.car.volvo.eucd_full_stop import EucdFullStop
-  fs = EucdFullStop()
-  fs.active = fs.cam_standby = True
-  fs.tpl_fsm4 = {"Byte_0": 0x55, "ACC_BrakeRequest": 1}
-  CS = SimpleNamespace(eucd_ecm_acc_engaged=True, eucd_car_hold=True, eucd_ecm_standstill_ready=False,
-                       eucd_stock_FSM3={"ACC_NoTargetCancel": 0, "Byte_6": 0, "FrameKind": 0x81, "ACC_Check": 0},
-                       eucd_stock_FSM0_frames=[{"Byte_0": 0, "ACC_AbortCode": 0, "ACC_Enabled": 0}],
-                       eucd_stock_FSM4_frames=[{"Byte_2": 0}],
-                       out=SimpleNamespace(vEgo=0., standstill=True, gasPressed=False))
-  CC = SimpleNamespace(enabled=True, longActive=True, actuators=SimpleNamespace(accel=-1.))
+  cc, CS, CC = owner(), car(hold=True), control()
+  owning(cc, CS, CC)
+  CS.eucd_stock_FSM0_frames = [{"Byte_0": 0, "ACC_AbortCode": 0, "ACC_Enabled": 0}]
   for _ in range(int(seconds / DT_CTRL)):
-    fs.update(CC, CS)
-  assert fs.holding and fs.standstill == (seconds >= CCP.EUCD_STANDSTILL_DELAY)
-  return fs, CC, CS
+    cc._eucd_ownership(CC, CS)
+  assert cc.eucd_holding and cc.eucd_standstill == (seconds >= CCP.EUCD_STANDSTILL_DELAY)
+  return cc, CC, CS
+
+
+def fsm4_brake_requested(cc, CS):
+  dat = cc._eucd_relay_fsm4(CS)[0][1]
+  return bool((dat[5] >> 6) & 1)
 
 
 def test_driver_gas_in_the_stop_drives_off_engaged():
-  fs, CC, CS = stopped_full_stop()
+  cc, CC, CS = stopped()
   CS.out.gasPressed, CC.longActive = True, False
-  fs.update(CC, CS)
-  assert fs.active and fs.driver_gas and fs.driving_off
-  assert not fs.standstill and not fs.holding
-  fsm4, op_mode = fs.fsm4({"Byte_0": 0xAA})
-  assert fsm4["ACC_BrakeRequest"] == 0 and not op_mode  # no brake from OP on the gas
+  cc._eucd_ownership(CC, CS)
+  assert cc.eucd_own and cc.eucd_driver_gas and cc.eucd_driving_off
+  assert not cc.eucd_standstill and not cc.eucd_holding
+  assert not fsm4_brake_requested(cc, CS)  # no brake from OP on the gas
 
 
 def test_disengaged_on_the_gas_ends_the_stop():
-  fs, CC, CS = stopped_full_stop()
+  cc, CC, CS = stopped()
   CS.out.gasPressed, CC.longActive, CC.enabled = True, False, False
-  fs.update(CC, CS)
-  assert not fs.active and not fs.driver_gas
+  cc._eucd_ownership(CC, CS)
+  assert not cc.eucd_own and not cc.eucd_driver_gas
 
 
-def test_gas_release_keeps_the_stop_until_op_long_is_back():
-  fs, CC, CS = stopped_full_stop()
+def test_gas_release_keeps_owning_until_op_long_is_back():
+  cc, CC, CS = stopped()
   CS.out.gasPressed, CC.longActive = True, False
-  fs.update(CC, CS)
+  cc._eucd_ownership(CC, CS)
   CS.out.gasPressed = False  # pedal released, OP's long back a frame later
-  fs.update(CC, CS)
-  assert fs.active and fs.driver_gas
+  cc._eucd_ownership(CC, CS)
+  assert cc.eucd_own and cc.eucd_driver_gas
   CC.longActive = True
-  fs.update(CC, CS)
-  assert fs.active and not fs.driver_gas
+  cc._eucd_ownership(CC, CS)
+  assert cc.eucd_own and not cc.eucd_driver_gas
 
 
 def test_short_stop_drives_off_on_traction():
-  fs, CC, CS = stopped_full_stop(seconds=1.)
+  cc, CC, CS = stopped(seconds=1.)
   CC.actuators.accel = 0.5
-  fs.update(CC, CS)
-  assert fs.active and not fs.stopping and not fs.holding and not fs.standstill
+  cc._eucd_ownership(CC, CS)
+  assert cc.eucd_own and not cc.eucd_stopping and not cc.eucd_holding and not cc.eucd_standstill
 
 
 def test_long_stop_waits_for_the_resume():
-  fs, CC, CS = stopped_full_stop()
+  cc, CC, CS = stopped()
   CC.actuators.accel = 0.5
-  fs.update(CC, CS)
-  assert fs.stopping and fs.holding and fs.standstill
+  cc._eucd_ownership(CC, CS)
+  assert cc.eucd_stopping and cc.eucd_holding and cc.eucd_standstill
 
 
 def test_ecm_in_standstill_waits_for_the_resume():
-  fs, CC, CS = stopped_full_stop(seconds=1.)
+  cc, CC, CS = stopped(seconds=1.)
   CS.eucd_ecm_standstill_ready, CC.actuators.accel = True, 0.5
-  fs.update(CC, CS)
-  assert fs.stopping and fs.holding
+  cc._eucd_ownership(CC, CS)
+  assert cc.eucd_stopping and cc.eucd_holding
 
 
-def resume_buttons_after(driver_resume, active):
+def resume_buttons_after(driver_resume, own):
   """One frame stopped in standstill: the Resume hold frames left and the drive-off request."""
-  from opendbc.car.volvo.eucd_full_stop import EucdFullStop
-  cc = CarController.__new__(CarController)
-  cc.frame, cc.eucd_last_resume_frame = 1000, 0
-  cc.eucd_op_resume_frames = cc.eucd_resume_hold_frames = cc.eucd_sng_ack_frames = cc.eucd_sng_count = 0
-  cc.eucd_waiting, cc.eucd_distance, cc.eucd_last_ccbuttons = False, 0, None
-  cc.eucd_full_stop = EucdFullStop()
-  cc.eucd_full_stop.active = active
+  cc = owner()
+  cc.frame = 1000
+  cc.eucd_own = own
   CS = SimpleNamespace(out=SimpleNamespace(cruiseState=SimpleNamespace(enabled=True, standstill=True), vEgo=0.),
                        eucd_acc_distance=0, eucd_stock_CCButtons_frames=[], eucd_driver_resume=driver_resume,
                        eucd_ecm_standstill_ready=True)
   cc._eucd_resume_buttons(SimpleNamespace(cruiseControl=SimpleNamespace(resume=False)), CS, [])
-  return cc.eucd_resume_hold_frames, cc.eucd_full_stop.drive_off_request
+  return cc.eucd_resume_hold_frames, cc.eucd_drive_off_request
 
 
 def test_driver_resume_drives_off_ops_stop():
