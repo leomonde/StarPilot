@@ -121,8 +121,10 @@ def create_eucd_longitudinal(packer, stock_fsm3, accel, acc_check, mode: LongMod
 def eucd_fsm4_brake_value(accel: float, brake: bool) -> int:
   # FSM4 brake word: 0x8000 | brake flag 0x4000 | 14-bit target
   CCP = CarControllerEUCDParams
-  bp, v = (CCP.EUCD_FSM4_BRAKE_ACCEL_BP, CCP.EUCD_FSM4_BRAKE_VALUE_V) if brake else (CCP.EUCD_FSM4_NO_BRAKE_ACCEL_BP, CCP.EUCD_FSM4_NO_BRAKE_VALUE_V)
-  return 0x8000 | (0x4000 if brake else 0) | int(round(float(np.interp(accel, bp, v))))
+  if brake:
+    lo, hi = CCP.EUCD_FSM4_BRAKE_ACCEL_RANGE
+    return 0xC000 | int(round(CCP.EUCD_FSM4_BRAKE_ZERO + CCP.EUCD_FSM4_BRAKE_GAIN * min(max(accel, lo), hi)))
+  return 0x8000 | int(round(float(np.interp(accel, CCP.EUCD_FSM4_NO_BRAKE_ACCEL_BP, CCP.EUCD_FSM4_NO_BRAKE_VALUE_V))))
 
 
 def create_eucd_fsm4(packer, stock_fsm4, accel: float, mode: LongMode | None = None):

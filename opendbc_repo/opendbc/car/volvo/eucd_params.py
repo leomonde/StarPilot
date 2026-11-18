@@ -81,9 +81,10 @@ class CarControllerEUCDParams:
   EUCD_TRACTION_COAST = (94., -9.)
   EUCD_TRACTION_DRIVE = (97., -6.)
 
-  # FSM4 14-bit brake target vs accel, with and without brake flag; brake as the camera's own (248 segments, route 29)
-  EUCD_FSM4_BRAKE_ACCEL_BP = [-3.5, -3.0, -2.5, -2.0, -1.5, -1.0, -0.5, 0.0, 0.2]
-  EUCD_FSM4_BRAKE_VALUE_V = [12443, 12568, 12688, 12821, 12957, 13084, 13212, 13332, 13382]
+  # FSM4 14-bit brake target = zero + gain * accel, as the camera's own (248 segments, route 29); no-brake map below
+  EUCD_FSM4_BRAKE_ZERO = 13332
+  EUCD_FSM4_BRAKE_GAIN = 255.  # counts per m/s^2
+  EUCD_FSM4_BRAKE_ACCEL_RANGE = (EUCD_ACCEL_MIN, 0.2)
   EUCD_FSM4_NO_BRAKE_ACCEL_BP = [-0.45, -0.2, 0.0, 0.2, 0.45, 0.8, 1.5]
   EUCD_FSM4_NO_BRAKE_VALUE_V = [13276, 13299, 13318, 13338, 13333, 13377, 13449]
 
