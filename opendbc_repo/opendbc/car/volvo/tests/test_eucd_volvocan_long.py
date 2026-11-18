@@ -143,6 +143,12 @@ def test_fsm4_op_brake_sets_value_from_accel(stock, accel):
   assert out[:5] == stock[:5] and out[7:] == stock[7:]
 
 
+@pytest.mark.parametrize("accel, camera", [(-3.0, 12568), (-2.5, 12688), (-2.0, 12821), (-1.0, 13084), (-0.5, 13212)])
+def test_fsm4_brake_value_as_the_camera(accel, camera):
+  # Route 29, 1110 s: the old map asked ~0.5 m/s^2 less than the camera at -2.8 and the stop ended at 1.5 m
+  assert abs((volvocan.eucd_fsm4_brake_value(accel, True) & 0x3FFF) - camera) <= 10
+
+
 def test_fsm4_brake_value_matches_stock_levels():
   # Matches the stock Byte_5 levels
   assert volvocan.eucd_fsm4_brake_value(-3.5, True) >> 8 == 0xF0
