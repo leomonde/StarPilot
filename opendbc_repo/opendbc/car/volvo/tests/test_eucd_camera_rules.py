@@ -142,8 +142,9 @@ def test_no_ownership_before_the_templates():
 
 def stopped(seconds=3.):
   """OP's stop at standstill, the car holding."""
-  cc, CS, CC = owner(), car(hold=True), control()
+  cc, CS, CC = owner(), car(hold=True, v=5., standstill=False), control()
   owning(cc, CS, CC)
+  CS.out.vEgo, CS.out.standstill = 0., True
   CS.eucd_stock_FSM0_frames = [{"Byte_0": 0, "ACC_AbortCode": 0, "ACC_Enabled": 0}]
   for _ in range(int(seconds / DT_CTRL)):
     cc._eucd_ownership(CC, CS)
@@ -205,14 +206,14 @@ def test_ecm_in_standstill_waits_for_the_resume():
   assert cc.eucd_stopping and cc.eucd_holding
 
 
-def resume_buttons_after(driver_resume, own):
+def resume_buttons_after(driver_resume, own, ecm_ready=True):
   """One frame stopped in standstill: the Resume hold frames left and the drive-off request."""
   cc = owner()
   cc.frame = 1000
   cc.eucd_own = own
   CS = SimpleNamespace(out=SimpleNamespace(cruiseState=SimpleNamespace(enabled=True, standstill=True), vEgo=0.),
                        eucd_acc_distance=0, eucd_stock_CCButtons_frames=[], eucd_driver_resume=driver_resume,
-                       eucd_ecm_standstill_ready=True)
+                       eucd_ecm_standstill_ready=ecm_ready)
   cc._eucd_resume_buttons(SimpleNamespace(cruiseControl=SimpleNamespace(resume=False)), CS, [])
   return cc.eucd_resume_hold_frames, cc.eucd_drive_off_request
 
@@ -221,3 +222,27 @@ def test_driver_resume_drives_off_ops_stop():
   assert resume_buttons_after(True, True) == (CCP.EUCD_RESUME_HOLD_FRAMES - 1, True)
   assert resume_buttons_after(False, True) == (0, False)
   assert resume_buttons_after(True, False) == (0, False)  # the camera's own stop takes it by itself
+
+
+def test_driver_resume_does_not_wait_for_the_ecm_ready():
+  # The ECM releases its hold on the driver's Resume at once (route 38, 42 s)
+  assert resume_buttons_after(True, True, ecm_ready=False) == (CCP.EUCD_RESUME_HOLD_FRAMES - 1, True)
+
+
+def test_engaged_at_a_stop_starts_in_standstill():
+  # Engaged behind a stopped lead that soon left: OP must hold and resume, not ask traction of a holding car (route 38, 40 s)
+  cc, CS, CC = owner(), car(hold=True), control(accel=0.6)
+  owning(cc, CS, CC)
+  assert cc.eucd_stopping and cc.eucd_standstill
+  for _ in range(10):
+    cc._eucd_ownership(CC, CS)
+  assert cc.eucd_stopping and cc.eucd_holding and cc.eucd_standstill
+
+
+def test_lead_icon_follows_op_not_the_template():
+  # Templates kept from different moments flickered the lead icon on the dash (route 37, seg 3)
+  cc = owner()
+  cc.eucd_own = True
+  cc.eucd_tpl_fsm0 = {0x10: {"Byte_0": 0x10, "ACC_FrontCar": 0}, 0x15: {"Byte_0": 0x15, "ACC_FrontCar": 1}}
+  for lead in (True, False):
+    assert {cc._eucd_fsm0({"Byte_0": b}, lead)["ACC_FrontCar"] for b in (0x10, 0x15, 0x00)} == {int(lead)}

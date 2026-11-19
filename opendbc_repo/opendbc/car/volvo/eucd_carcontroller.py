@@ -80,7 +80,7 @@ class CarControllerEUCD(CarControllerBase):
     CS.eucd_op_standstill = self.eucd_standstill
     self._eucd_resume_buttons(CC, CS, can_sends)
     for stock_fsm0 in CS.eucd_stock_FSM0_frames:
-      can_sends.append(create_eucd_fsm0(self.packer, self._eucd_fsm0(stock_fsm0), CS.eucd_ecm_acc_engaged))
+      can_sends.append(create_eucd_fsm0(self.packer, self._eucd_fsm0(stock_fsm0, CC.hudControl.leadVisible), CS.eucd_ecm_acc_engaged))
 
     if now_nanos >= self.eucd_next_long_tx_nanos:
       period = int(CarControllerEUCDParams.EUCD_LONG_TX_PERIOD * 1e9)
@@ -165,7 +165,8 @@ class CarControllerEUCD(CarControllerBase):
       # The driver's Resume also drives off OP's stop: the ECM takes it, but held in standstill it stays (route 8ab, 436 s)
       driver_resume = CS.eucd_driver_resume and self.eucd_own
       drive_off = lead_moved or op_resume or driver_resume or self.eucd_driver_gas
-      if at_standstill and self.eucd_waiting and drive_off and self._eucd_drive_off_ready(CS):
+      # The ECM takes the driver's Resume at once, so OP follows it without waiting for its ready (route 38, 42 s)
+      if at_standstill and self.eucd_waiting and drive_off and (driver_resume or self._eucd_drive_off_ready(CS)):
         self.eucd_resume_hold_frames = CCP.EUCD_RESUME_HOLD_FRAMES
         if self.eucd_sng_count == 0:
           self.eucd_sng_ack_frames = round(CCP.EUCD_SNG_ACK_TIME / CCP.EUCD_LONG_TX_PERIOD)  # counted down per FSM3
@@ -209,6 +210,10 @@ class CarControllerEUCD(CarControllerBase):
       self._eucd_release()
     elif not self.eucd_own and have_templates and clean:
       self.eucd_own = True
+      if CS.out.standstill:
+        # Engaged at a stop: in standstill at once, as the camera, or the car keeps holding (route 38, 40 s)
+        self.eucd_stopping = self.eucd_standstill = True
+        self.eucd_stopped_frames = int(CCP.EUCD_STANDSTILL_DELAY / DT_CTRL)
 
     if self.eucd_own:
       self._eucd_update_stop(CC, CS)
@@ -261,11 +266,13 @@ class CarControllerEUCD(CarControllerBase):
     CCP = CarControllerEUCDParams
     return self.eucd_stopped_frames * DT_CTRL >= CCP.EUCD_STANDSTILL_DELAY + CCP.EUCD_ECM_READY_TIMEOUT
 
-  def _eucd_fsm0(self, stock_fsm0):
+  def _eucd_fsm0(self, stock_fsm0, lead: bool):
     """FSM0 to the ECM: the camera's, or its template while OP owns the ECM (its standby kept from the ECM)."""
     if not self.eucd_own:
       return stock_fsm0
-    return self.eucd_tpl_fsm0.get(int(stock_fsm0["Byte_0"]), next(iter(self.eucd_tpl_fsm0.values())))
+    tpl = self.eucd_tpl_fsm0.get(int(stock_fsm0["Byte_0"]), next(iter(self.eucd_tpl_fsm0.values())))
+    # Lead icon from OP's lead, not the template's frozen one, which flickered between keys (route 37, seg 3)
+    return {**tpl, "ACC_FrontCar": int(lead)}
 
   # ---- Longitudinal ----
 
