@@ -359,8 +359,8 @@ class CarControllerEUCD(CarControllerBase):
     """Car frames to the camera: with OP owning the ECM, ACC standby, no ACC brake, hold nor engaging button shown."""
     standby = self.eucd_own or self.eucd_exit_standby_frames > 0
     sends = []
-    for stock_wheelspeed1 in CS.eucd_stock_wheelspeed1_frames:
-      sends.append(create_eucd_cam_wheel_status(self.packer, stock_wheelspeed1, standby))
+    for stock_wheel_rear in CS.eucd_stock_WheelRear_frames:
+      sends.append(create_eucd_cam_wheel_status(self.packer, stock_wheel_rear, standby))
     for stock_brake_req_ack in CS.eucd_stock_BrakeReqAck_frames:
       sends.append(create_eucd_cam_brake_request_ack(self.packer, stock_brake_req_ack, standby))
     for stock_engine_data in CS.eucd_stock_EngineData_frames:

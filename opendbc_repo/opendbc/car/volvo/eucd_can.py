@@ -148,12 +148,12 @@ def create_eucd_fsm0(packer, stock_fsm0, ecm_engaged: bool):
   return packer.make_can_msg("FSM0", 0, values)
 
 
-def create_eucd_cam_wheel_status(packer, stock_wheelspeed1, standby: bool):
-  # wheelspeed1 to the camera; standby: no ACC brake request, applied brake nor hold (seen in standby it latches FC, routes 886/888)
-  values = _eucd_copy(stock_wheelspeed1, skip=("WhlSpdRR", "WhlSpdLR"))
+def create_eucd_cam_wheel_status(packer, stock_wheel_rear, standby: bool):
+  # WheelRear to the camera; standby: no ACC brake request, applied brake nor hold (seen in standby it latches FC, routes 886/888)
+  values = _eucd_copy(stock_wheel_rear, skip=("WhlSpdRR", "WhlSpdLR"))
   if standby:
     values |= {"BrakeReqActive": 0, "ACC_BrakeApplied": 0, "StandstillHold": 0}
-  return packer.make_can_msg("wheelspeed1", CANBUS.cam, values)
+  return packer.make_can_msg("WheelRear", CANBUS.cam, values)
 
 
 def create_eucd_cam_brake_request_ack(packer, stock_brake_req_ack, standby: bool):

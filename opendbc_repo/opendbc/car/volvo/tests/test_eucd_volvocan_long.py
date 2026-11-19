@@ -188,18 +188,18 @@ def test_fsm1_brake_bit_follows_op(stock, mode):
   assert out[:2] == stock[:2] and out[3:] == stock[3:]
 
 
-WHEELSPEED1_ADDR = 0x220
+WHEEL_REAR_ADDR = 0x220
 BRAKE_REQ_ACK_ADDR = 0x299
-# Stock wheelspeed1 and BrakeReqAck frames, route 816
-STOCK_WHEELSPEED1 = ["8b11e000a2577a30", "8b11e400a245a216", "8b11e500a1f6a1d3"]
+# Stock WheelRear and BrakeReqAck frames, route 816
+STOCK_WHEEL_REAR = ["8b11e000a2577a30", "8b11e400a245a216", "8b11e500a1f6a1d3"]
 STOCK_BRAKE_REQ_ACK = ["40054c020dff2235", "4005480201f72239"]
 
 
-@pytest.mark.parametrize("stock", [bytes.fromhex(h) for h in STOCK_WHEELSPEED1])
+@pytest.mark.parametrize("stock", [bytes.fromhex(h) for h in STOCK_WHEEL_REAR])
 @pytest.mark.parametrize("standby", [False, True])
-def test_wheelspeed1_relay_to_camera(stock, standby):
-  addr, dat, bus = volvocan.create_eucd_cam_wheel_status(CANPacker(DBC), parse("wheelspeed1", WHEELSPEED1_ADDR, 50, stock), standby)
-  assert (addr, bus) == (WHEELSPEED1_ADDR, 2)
+def test_wheel_rear_relay_to_camera(stock, standby):
+  addr, dat, bus = volvocan.create_eucd_cam_wheel_status(CANPacker(DBC), parse("WheelRear", WHEEL_REAR_ADDR, 50, stock), standby)
+  assert (addr, bus) == (WHEEL_REAR_ADDR, 2)
   # standby: no brake request (bit2) nor ACC brake applied (bit0), 0xE5 -> 0xE0, and no hold (b0 bit6)
   assert dat[2] == (stock[2] & ~0x05 if standby else stock[2])
   assert dat[0] == (stock[0] & ~0x40 if standby else stock[0])

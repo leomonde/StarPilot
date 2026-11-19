@@ -34,7 +34,7 @@ def required_frames(**overrides):
     "EngineData": {"ACC_State_ECM": EcmAccState.ENGAGED},
     "CCButtons": {},
     "GearSelector": {"GearLever": 3},
-    "wheelspeed1": {}, "BrakeReqAck": {}, "BrakeHold": {}, "AccHold": {},
+    "WheelRear": {}, "BrakeReqAck": {}, "BrakeHold": {}, "AccHold": {},
   }
   cam_values = {"FSM0": {"ACC_Available": 1}, "FSM1": {}, "FSM3": {"ACC_Standstill": 0}, "FSM4": {}, "FSM5": {"TSR_Speed": 0}}
   for name, signals in overrides.items():
@@ -145,7 +145,7 @@ def controller_state(speed=20., angle=0., brake=False):
   cs.eucd_driver_resume = False
   cs.eucd_stock_FSM1 = {"ACC_Braking": 0}
   cs.eucd_stock_FSM3 = {"ACC_AccelerationRequest": 0., "ACC_Mode": 1, "ACC_NoTargetCancel": 0, "Byte_6": 0, "FrameKind": 0x81, "ACC_Check": 0}
-  for name in ("FSM0", "FSM4", "wheelspeed1", "BrakeReqAck", "BrakeHold", "EngineData", "AccHold", "CCButtons"):
+  for name in ("FSM0", "FSM4", "WheelRear", "BrakeReqAck", "BrakeHold", "EngineData", "AccHold", "CCButtons"):
     setattr(cs, f"eucd_stock_{name}_frames", [])
   return cs
 

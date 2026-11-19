@@ -169,7 +169,7 @@ class CarStateEUCD(CarStateBase):
     # Frames carcontroller relays 1:1
     self.eucd_stock_FSM0_frames = eucd_all_frames(cam_cp, "FSM0")
     self.eucd_stock_FSM4_frames = eucd_all_frames(cam_cp, "FSM4")
-    self.eucd_stock_wheelspeed1_frames = eucd_all_frames(pt_cp, "wheelspeed1")
+    self.eucd_stock_WheelRear_frames = eucd_all_frames(pt_cp, "WheelRear")
     self.eucd_stock_BrakeReqAck_frames = eucd_all_frames(pt_cp, "BrakeReqAck")
     self.eucd_stock_BrakeHold_frames = eucd_all_frames(pt_cp, "BrakeHold")
     self.eucd_stock_EngineData_frames = eucd_all_frames(pt_cp, "EngineData")
@@ -198,7 +198,7 @@ class CarStateEUCD(CarStateBase):
       ("EngineData", 66),
       ("CCButtons", 66),
       ("GearSelector", 66),
-      ("wheelspeed1", 50),
+      ("WheelRear", 50),
       ("BrakeReqAck", 50),
       ("BrakeHold", 50),
       ("AccHold", 25),

@@ -15,7 +15,7 @@
 #define VOLVO_EUCD_Brake_Info    0x20AU  // RX, driver brake pressed
 #define VOLVO_EUCD_CCButtons     0x127U  // TX by OP, CC buttons
 #define VOLVO_EUCD_PSCM1         0x246U  // TX by OP to camera, PSCM state
-#define VOLVO_EUCD_WHEELSPEED1   0x220U  // TX by OP to camera, rear wheel speeds + brake request active
+#define VOLVO_EUCD_WHEEL_REAR    0x220U  // TX by OP to camera, rear wheel speeds + brake request active
 #define VOLVO_EUCD_BRAKE_REQ_ACK 0x299U  // TX by OP to camera, brake request ack
 #define VOLVO_EUCD_BRAKE_HOLD    0x1FFU  // TX by OP to camera, brake hold state (masked in OP's no-target stop)
 #define VOLVO_EUCD_ACC_HOLD      0x325U  // TX by OP to camera, ECM ACC hold state (shown as standby in OP's no-target stop)
@@ -290,7 +290,7 @@ static safety_config volvo_eucd_init(uint16_t param) {
     {VOLVO_EUCD_CCButtons, VOLVO_EUCD_PARTY_BUS, 8, .check_relay = true},
     {VOLVO_EUCD_PSCM1,     VOLVO_EUCD_PARTY_BUS, 8, .check_relay = true},  // OP replaces stock steering servo state
     // car -> camera, relayed by OP
-    {VOLVO_EUCD_WHEELSPEED1,   VOLVO_EUCD_PARTY_BUS, 8, .check_relay = true},
+    {VOLVO_EUCD_WHEEL_REAR,    VOLVO_EUCD_PARTY_BUS, 8, .check_relay = true},
     {VOLVO_EUCD_BRAKE_REQ_ACK, VOLVO_EUCD_PARTY_BUS, 8, .check_relay = true},
     {VOLVO_EUCD_BRAKE_HOLD,    VOLVO_EUCD_PARTY_BUS, 8, .check_relay = true},
     {VOLVO_EUCD_ACC_HOLD,      VOLVO_EUCD_PARTY_BUS, 8, .check_relay = true},

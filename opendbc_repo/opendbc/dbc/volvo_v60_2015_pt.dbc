@@ -182,7 +182,7 @@ BO_ 522 Brake_Info: 8 XXX
  SG_ CHECKSUM : 39|4@0+ (1,0) [0|15] "" XXX
  SG_ NEW_SIGNAL_1 : 47|8@0+ (1,0) [0|255] "" XXX
 
-BO_ 544 wheelspeed1: 8 BCM
+BO_ 544 WheelRear: 8 BCM
  SG_ WhlSpdRR : 39|16@0+ (0.01,-327.68) [0|65535] "" XXX
  SG_ WhlSpdLR : 55|16@0+ (0.01,-327.68) [0|65535] "" XXX
  SG_ Byte_0_b7 : 7|1@0+ (1,0) [0|1] "" XXX
@@ -199,7 +199,7 @@ BO_ 544 wheelspeed1: 8 BCM
  SG_ Byte_6 : 55|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_7 : 63|8@0+ (1,0) [0|255] "" XXX
 
-BO_ 565 wheelspeed0: 8 BCM
+BO_ 565 WheelFront: 8 BCM
  SG_ WhlSpdRF : 39|16@0+ (0.01,-327.68) [0|65535] "" XXX
  SG_ WhlSpdLF : 55|16@0+ (0.01,-327.68) [0|65535] "" XXX
 
