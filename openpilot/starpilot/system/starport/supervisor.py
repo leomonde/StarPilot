@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any
 
 from openpilot.common.hardware import COMMA_HARDWARE
-from openpilot.starpilot.system.starport import (car_profiles, device_health, head_unit_fixes, identity as identity_store, new_setup, quirk_state,
+from openpilot.starpilot.system.starport import (car_profiles, device_health, head_unit_fixes, identity as identity_store, quirk_state,
                                                  reachability, setup_ladder, system_slice)
 from openpilot.starpilot.system.starport import reconnect_notice
 from openpilot.starpilot.system.starport.adapter_syslog import AdapterSyslog
@@ -43,7 +43,9 @@ from openpilot.starpilot.system.starport.bugsink_report import PairingAttempt
 from openpilot.starpilot.system.starport.frame_source import (DEFAULT_PATH as DEFAULT_FRAME_PATH, FLAG_ASYNC_READBACK, FLAG_NV12,
                                                                   FORMAT_NV12, FrameRequest)
 from openpilot.starpilot.system.starport.projection_control import DEFAULT_CONTROL_SOCKET, NATIVE_FOCUS
-from openpilot.starpilot.system.starport.touch import DEFAULT_TOUCH_SOCKET
+from openpilot.starpilot.system.starport.radio_watch import (RADIO_CHANGE_WINDOW as RADIO_CHANGE_WINDOW,
+                                                           RADIO_CHECK_INTERVAL as RADIO_CHECK_INTERVAL, SharedRadioWatch)
+from openpilot.starpilot.system.starport.touch import DEFAULT_TOUCH_SOCKET, TouchEvent
 from openpilot.starpilot.system.starport.view import CAR_FRAME_PATH, ViewSource, renderer_available
 from openpilot.starpilot.system.starport.session import CODEC_H265, AuthenticationRejected, PeerRequestedStop, ProjectionSession, SharedRadioStall
 
@@ -76,8 +78,6 @@ USB_CONFIGURE_WAIT = 15.0    # slower receivers need time to enumerate after the
 LINK_CHECK_INTERVAL = 1.0    # how often the link watcher asks whether the car's Wi-Fi is still up
 LINK_CHECK_SLOW = 1.0        # a link check slower than this is logged (NetworkManager answers over D-Bus)
 STREAM_STALL_LOG = 1.0       # a streaming loop pass slower than this is logged
-RADIO_CHECK_INTERVAL = 0.5   # how often the comma's own Wi-Fi is checked for a join or roam (a sysfs read)
-RADIO_CHANGE_WINDOW = 15.0   # a join or roam this recent can still stall the car (11-02: stall came 7.5 s after a roam)
 STALL_CAPTURE_S = 20.0       # device logs kept from before a shared-radio stall is reported
 REPORTED_SETTINGS = ("connection", "usb_mode", "view", "encoder", "fps", "bitrate_kbps", "rate_control", "gpu_nv12",
                      "async_readback", "wifi_interface", "dedicated_wifi_interface", "verify_head_unit", "version_status",
@@ -274,74 +274,6 @@ class LinkWatch:
           self.log("link_lost", reason=self.lost, wifi_dbm=self.wifi_dbm)
           return
       self._stop.wait(self.interval)
-
-
-class SharedRadioWatch:
-  """Notices the comma's own Wi-Fi joining or roaming while the car is on aa0; both share one radio.
-
-  The link going down or up bumps carrier_changes, a plain sysfs read. The network's name is never read or logged.
-  """
-
-  def __init__(self, log: Callable[..., None], interface: str = "wlan0", interval: float = RADIO_CHECK_INTERVAL,
-               counter: Path | None = None, carrier: Path | None = None, on_down: Callable[[], None] | None = None,
-               on_stall: Callable[[], None] | None = None):
-    self.log, self.interface, self.interval = log, interface, interval
-    self.counter = counter or Path(f"/sys/class/net/{interface}/carrier_changes")
-    self.carrier = carrier or Path(f"/sys/class/net/{interface}/carrier")
-    self.on_down = on_down  # the other network was lost, not just roamed
-    self.on_stall = on_stall  # the car's acks stopped after a change that has not connected yet
-    self.changed_at: float | None = None
-    self._stop = threading.Event()
-    self._thread = threading.Thread(target=self._run, name="aa_radio_watch", daemon=True)
-
-  def start(self) -> SharedRadioWatch:
-    self._thread.start()
-    return self
-
-  def stop(self) -> None:
-    self._stop.set()
-
-  def recent(self, now: float | None = None) -> bool:
-    """Whether the other network joined or roamed within RADIO_CHANGE_WINDOW."""
-    changed_at = self.changed_at
-    now = time.monotonic() if now is None else now
-    return changed_at is not None and now - changed_at <= RADIO_CHANGE_WINDOW
-
-  def _read(self) -> str | None:
-    try:
-      return self.counter.read_text().strip()
-    except OSError:
-      return None
-
-  def _run(self) -> None:
-    last = self._read()
-    while not self._stop.wait(self.interval):
-      current = self._read()
-      if current is None or current == last:
-        continue
-      last = current
-      self.changed_at = time.monotonic()
-      self.log("other_wifi_changed", interface=self.interface)
-      if self.on_down is not None and not self._carrier():
-        try:
-          self.on_down()
-        except Exception as error:
-          self.log("other_wifi_hold_failed", error=str(error) or type(error).__name__)
-
-  def stalled(self) -> None:
-    # A join that already connected has only its address left. Stopping it there lost the hotspot and still
-    # dropped the car on 2026-11-16, while a joined hotspot then streamed alongside the car for minutes.
-    if self._carrier():
-      self.log("other_wifi_join_kept", interface=self.interface)
-      return
-    if self.on_stall is not None:
-      self.on_stall()
-
-  def _carrier(self) -> bool:
-    try:
-      return self.carrier.read_text().strip() == "1"
-    except OSError:
-      return False  # reading carrier of a down interface fails with EINVAL
 
 
 class EventLog:
@@ -546,7 +478,6 @@ class Supervisor:
     status["experimental_fixes"] = head_unit_fixes.experimental_entries()
     status["fix_suggestion"] = self._fix_suggestion()
     status["car_candidates"] = list(getattr(self, "_candidates", []))[:8]  # paired Android Auto devices to choose between
-    status["new_setup"] = new_setup.enabled()
     status["setup_ladder"] = self._ladder.snapshot(self.config["receiver_address"], self.car_type() == "adapter", self._unofficial_dongle())
     status["auto_paused"] = self.auto.suppressed
     status["recent"] = list(self.log.recent)[-8:]
@@ -738,7 +669,8 @@ class Supervisor:
       if chosen:
         if self._bluez is not None:
           self._bluez.release()
-        self.config.update(receiver_address="", receiver_name="", companion_address="", companion_name="", car_fingerprint={})
+        self.config.update(receiver_address="", receiver_name="", companion_address="", companion_name="", car_fingerprint={},
+                           touch_units_cache={})
       elif companion:
         self.config.update(companion_address="", companion_name="")
       identity_store.save_config(self.config)
@@ -758,6 +690,9 @@ class Supervisor:
         self._quirks.reset(key)
         self._quirks.save()
         reset = reset or had_fix_state
+      if address and self.config.get("touch_units_cache"):
+        self.config["touch_units_cache"] = {}
+        reset = True
       if reset:
         self._strategy = None
         self.config["modern_reply_cache"] = replies
@@ -862,6 +797,15 @@ class Supervisor:
       self.config["car_profile_override"] = profile
       identity_store.save_config(self.config)
     self.log("car_profile_selected", profile=profile or "auto")
+
+  def _remember_touch_units(self, key: str, units: str) -> None:
+    with self._lock:
+      cache = dict(self.config.get("touch_units_cache", {}))
+      if cache.get(key) == units:
+        return
+      cache[key] = units
+      self.config["touch_units_cache"] = cache
+      identity_store.save_config(self.config)
 
   def _remember_fingerprint(self, head_unit: dict) -> None:
     fingerprint = car_profiles.fingerprint_from(head_unit, self.config["receiver_address"])
@@ -2083,6 +2027,8 @@ class Supervisor:
     self._stage("negotiating")
     self._fix_context = None
     session.on_discovered = self._choose_fixes
+    session.touch_units = dict(config.get("touch_units_cache", {}))
+    session.on_touch_units = self._remember_touch_units
     mode = session.start(config["device_name"], "comma.ai")
     self._set(mode=mode.as_dict(), error="")
     self.log("projection_ready", mode=mode.as_dict(), head_unit_subject=session.head_unit_subject)
@@ -2249,6 +2195,7 @@ class Supervisor:
     started = time.monotonic()
     last_fresh = time.monotonic()
     last_unavailable = 0.0
+    touch_setup_sent = 0.0
     next_check = 0.0
     ages: deque[float] = deque(maxlen=120)
     sent_times: deque[float] = deque(maxlen=200)
@@ -2297,6 +2244,10 @@ class Supervisor:
         source.demand(1.0)
       else:
         source.release_demand()
+      touch = getattr(session, "touch", None)
+      if touch is not None and touch.calibrating and session.focused and now - touch_setup_sent >= 1.0:
+        session.touch_events.append(TouchEvent("setup", 1.0, 0.0))  # the car view shows the dot while these keep coming
+        touch_setup_sent = now
       if session.touch_events:
         source.send_touches(list(session.touch_events))
         session.touch_events.clear()

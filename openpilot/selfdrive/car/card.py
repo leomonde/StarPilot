@@ -143,20 +143,7 @@ def can_comm_callbacks(logcan: messaging.SubSocket, sendcan: messaging.PubSocket
   return can_recv, can_send
 
 
-def curve_press_receipt(CS: car.CarState, helper: VCruiseHelper, sm, *, curve_replay: bool,
-                        slc_replay: bool, host_long_active: bool, observed_ns: int):
-  """A confirmation or native standstill RES must not also override Curve control."""
-  accelerate = frozenset((car.CarState.ButtonEvent.Type.accelCruise,
-                          car.CarState.ButtonEvent.Type.resumeCruise))
-  pressed = {b.type.raw for b in CS.buttonEvents if b.pressed and b.type.raw in accelerate}
-  if (not curve_replay or not host_long_active or not CS.canValid or CS.canTimeout or not CS.cruiseState.available or
-      CS.standstill or CS.cruiseState.standstill or not pressed):
-    return None
-  if (helper.slc_consumed_button is not None or bool(pressed & helper.slc_suppressed_buttons) or
-      slc_replay and bool(sm['slcState'].hasPending)):
-    return None
-  return ('curveAccelPress', None, float(helper.v_cruise_kph_last / 3.6),
-          float(helper.v_cruise_kph / 3.6), observed_ns)
+curve_press_receipt = slc_physical.curve_press_receipt
 
 
 def alpha_long_requested(params, *, is_release: bool) -> bool:
@@ -663,7 +650,8 @@ class Car:
           current_native(self.sm, self.CP, now_ns=now_ns, axis_session_id=self.aol_axis_session()),
           self.aol_transport_feedback, self.aol_card_intent, now_ns=now_ns, producer=self.slc_producer_session))
       from openpilot.starpilot.car.volkswagen.aol import awaiting_initial_request as volkswagen_initial_request
-      volkswagen_initial_wait = volkswagen_initial_request(self.CP, CS, self.sm,
+      volkswagen_initial_wait = self.CP.brand == 'volkswagen' and volkswagen_initial_request(
+        self.CP, CS, self.sm,
         current_native(self.sm, self.CP, now_ns=now_ns, axis_session_id=self.aol_axis_session()),
         self.aol_transport_feedback, self.aol_card_intent, now_ns=now_ns,
         producer=getattr(self, 'slc_producer_session', ''))
@@ -835,9 +823,12 @@ class Car:
           gm_claim.claim(self.traffic_receipt[1], self.traffic_receipt[2], self.traffic_receipt[3])
     self.switchback_receipt = None
     if self.switchback_button_tracker is not None and self.switchback_settings_owner is not None:
+      media_map = getattr(self, 'ioniq_media_map', None)
+      map_current = media_map is not None and media_map.checked_ns == now_ns
       self.switchback_receipt = conditional_traffic_candidate(
         CS, self.switchback_button_tracker, self.params, self.switchback_settings_owner,
-        self.CP, self.sm, now_ns=now_ns, media=media_observation, action=7)
+        self.CP, self.sm, now_ns=now_ns, media=media_observation, action=7,
+        media_buttons=media_map.buttons if map_current else None, media_map_captured=map_current)
     if consumed is not None:
       self.slc_receipts.append(('confirmationAccept' if consumed.button == 'accel' else 'confirmationReject',
                                 consumed, 0.0, 0.0, now_ns))
@@ -1129,9 +1120,13 @@ class Car:
       if self.aol_card_intent is not None:
         allowed_latch, pause_lateral, pause_longitudinal = self.aol_card_intent.output(CS)
         lateral_armed = self.aol_card_intent.allowed_latch
+      intent_deadline_ns = int(cs_send.logMonoTime) + 200_000_000
+      publication = (getattr(self.aol_card_intent, 'intent_publication', None) if self.CP.brand == 'volkswagen' else None)
+      if publication is not None:
+        allowed_latch, pause_lateral, pause_longitudinal, lateral_armed, intent_deadline_ns = publication(CS, int(cs_send.logMonoTime))
       intent_msg.aolIntentWire = encode_intent(IntentState(
         self.slc_producer_session, self.aol_sequence, int(cs_send.logMonoTime), int(cs_send.logMonoTime),
-        int(cs_send.logMonoTime) + 200_000_000, allowed_latch, pause_lateral, pause_longitudinal, self.aol_qualified, lateral_armed,
+        intent_deadline_ns, allowed_latch, pause_lateral, pause_longitudinal, self.aol_qualified, lateral_armed,
         bool(getattr(self.aol_card_intent, "optional_set_release_policy", lambda: False)())))
       self.pm.send('aolIntentWire', intent_msg)
 

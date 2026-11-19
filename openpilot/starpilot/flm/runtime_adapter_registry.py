@@ -18,7 +18,7 @@ REVISION = 'actual-controller-registry-v2'
 
 
 @cache
-def implementation_revision(controller_type, interface_type):
+def implementation_revision(controller_type, interface_type, *, vin_compatible=False):
   """Selected steering semantics; startup only, never Controls.tick."""
   from openpilot.starpilot.flm.native_primitives import native_identity
   from openpilot.starpilot.flm.steering_compatibility import revision
@@ -27,7 +27,13 @@ def implementation_revision(controller_type, interface_type):
   controller = Path(cast(str, importlib.import_module(controller_type.__module__).__file__)).resolve()
   interface = Path(cast(str, importlib.import_module(interface_type.__module__).__file__)).resolve()
   names = (controller_type.__module__ + '.' + controller_type.__qualname__, interface_type.__module__ + '.' + interface_type.__qualname__)
-  return revision(here.parents[2], controller, interface, names, native_identity())
+  native = native_identity()
+  if vin_compatible:
+    from openpilot.starpilot.flm.identity_transition import known_vin_revision
+    previous = known_vin_revision(here.parents[2], controller, interface, names, native)
+    if previous is not None:
+      return previous
+  return revision(here.parents[2], controller, interface, names, native)
 
 
 SOURCE_LEASE_NS = 500_000_000
@@ -234,6 +240,7 @@ class SourceState:
 def read_source(cp, params, *, now_ns, cp_sha256=None, calibration=(), vehicle_session="", calibration_generation=''):
   """Only startup/separate-process settings work; errors disable learning."""
   cp_sha256 = car_params_digest(cp) if cp_sha256 is None else cp_sha256
+  from openpilot.starpilot.flm.vehicle_identity import REGISTRATION_KEY, identity_keys, known_vin, persistent_unit
   try:
     keys = tuple(
       dict.fromkeys(
@@ -248,15 +255,16 @@ def read_source(cp, params, *, now_ns, cp_sha256=None, calibration=(), vehicle_s
           'TurnAssist',
           'SteeringDelayPreferences',
           *LEGACY_KEYS,
+          *identity_keys(cp),
         )
       )
     )
     snapshots = []
     for key in keys:
       raw, readable = read_saved(params, key, MAX_DOCUMENT_BYTES)
-      if not readable:
+      if not readable and key != REGISTRATION_KEY:
         raise ValueError('unreadable source')
-      snapshots.append((key, raw))
+      snapshots.append((key, raw if readable else None))
     raw_by_key = dict(snapshots)
     preference = read_preference(params, cp, preference_snapshot=(raw_by_key[PREFERENCE_KEY], True), legacy_snapshot=(raw_by_key['ForceAutoTuneOff'], True))
     if not preference.valid:
@@ -326,10 +334,9 @@ def read_source(cp, params, *, now_ns, cp_sha256=None, calibration=(), vehicle_s
     calibration = tuple(calibration)
     if len(calibration) != 3 or not all(math.isfinite(v) for v in calibration):
       raise ValueError("uncertain calibration")
-    from opendbc.car.vin import is_valid_vin, VIN_UNKNOWN
-
-    vin = str(cp.carVin)
-    if not is_valid_vin(vin) or vin == VIN_UNKNOWN:
+    vin = known_vin(cp)
+    binding = persistent_unit(cp, raw_by_key)
+    if vin is None:
       if not vehicle_session or len(vehicle_session) > 64:
         raise ValueError('unknown vehicle needs a fresh drive session')
       unit = vehicle_session
@@ -339,13 +346,15 @@ def read_source(cp, params, *, now_ns, cp_sha256=None, calibration=(), vehicle_s
       calibration_generation and (len(calibration_generation) != 32 or any(c not in '0123456789abcdef' for c in calibration_generation))
     ):
       raise ValueError('invalid calibration lifecycle')
+    if vin is None and binding is not None and read_saved(params, REGISTRATION_KEY, MAX_DOCUMENT_BYTES) != (raw_by_key[REGISTRATION_KEY], True):
+      raise ValueError('device registration changed')
     frame_identity = calibration if not calibration_generation else ('live_vehicle_frame_v2', calibration_generation)
     identity_settings = tuple((key, None if raw is None else raw.hex()) for key, raw in snapshots
                               if key != 'SteeringDelayPreferences' or raw is not None)
     epoch = digest((identity_settings, frame_identity, unit))
     persistent_epoch = (
-      digest(('persistent_vehicle_source_v1', cp_sha256, identity_settings, vin))
-      if is_valid_vin(vin) and vin != VIN_UNKNOWN and calibration_generation
+      digest(('persistent_vehicle_source_v1', cp_sha256, identity_settings, binding))
+      if binding is not None and calibration_generation
       else ''
     )
     return SourceState(
@@ -417,7 +426,10 @@ def selected_descriptor(cp, ci, controller):
   turn_assist = bool(
     getattr(controller, 'turn_assist', None) or getattr(getattr(getattr(controller, 'starpilot_extension', None), 'policy', None), 'turn_assist', False)
   )
-  return ControllerDescriptor(domain, mode, policy, implementation_revision(type(controller), type(ci)), stage, car_params_digest(cp), conversion, turn_assist)
+  from opendbc.car.vin import VIN_UNKNOWN, is_valid_vin
+  vin_compatible = is_valid_vin(str(cp.carVin)) and str(cp.carVin) != VIN_UNKNOWN
+  implementation = implementation_revision(type(controller), type(ci), vin_compatible=vin_compatible)
+  return ControllerDescriptor(domain, mode, policy, implementation, stage, car_params_digest(cp), conversion, turn_assist)
 
 
 def baseline_values(controller):

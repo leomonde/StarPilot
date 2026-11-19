@@ -257,6 +257,7 @@ const REASONS = {
   accepted_target_currently_acknowledged: "The controller acknowledged the accepted correction.",
 }
 export function learningReason(reason) {
+  if (reason === 'vehicle_identity_unavailable') return 'This drive was reviewed on its own. Automatic saving is waiting for the car to identify itself.'
   if (reason === "Assessment cache full") return "FLM ran out of space in its review history. The latest analysis could not be saved; this does not mean your saved tune was erased."
   if (Object.hasOwn(REASONS, reason)) return REASONS[reason]
   const pattern = /^observed_(understeer|oversteer|late_turn_in|early_turn_in|unwind_too_slow|unwind_too_fast|low_speed_unwillingness|center_chatter|notchy_mid_curve)_(left|right|center)$/.exec(reason)
@@ -374,6 +375,25 @@ export function recordedSteeringView(value) {
   return { errorRms: value.error_rms, samples: value.samples, windows: value.windows, route: value.route,
     segment: value.segment, units: value.domain === 'lateral_acceleration' ? 'm/s²' : 'degrees',
     points: value.points.map(([ns, desired, actual]) => ({ at: (ns - value.source_start_ns) / 1e6, desired, actual })) }
+}
+
+export function parkedAnalysisProgress(report) {
+  const current = report?.current
+  if (current?.status !== 'fitting') return null
+  const labels = { preparing: 'Preparing drive analysis', reading: 'Reading a recorded drive',
+    verifying: 'Verifying the recording', checking: 'Checking steering suggestions' }
+  const fallback = { loading_parked_analysis: 'preparing', analyzing_last_completed_drive: 'reading',
+    checking_recorded_steering_recommendations: 'checking' }[current.reason]
+  const value = current.details?.['Parked analysis progress']
+  const phase = Array.isArray(value) && value.length === 3 && Object.hasOwn(labels, value[0]) ? value[0] : fallback
+  if (!Object.hasOwn(labels, phase)) return null
+  const [, done, total] = Array.isArray(value) ? value : []
+  const counted = Array.isArray(value) && value.length === 3 && Object.hasOwn(labels, value[0]) && Number.isSafeInteger(done) && Number.isSafeInteger(total) && done >= 0 && total > 0 && done <= total && total <= 180
+  const steps = { preparing: 'Starting the parked analyzer.', reading: 'Reading the recording sections.',
+    verifying: 'Checking that the recording is unchanged.', checking: 'Checking the suggested changes.' }
+  return { phase, label: labels[phase], completed: counted ? done : null, total: counted ? total : null,
+    percent: counted && ['reading', 'verifying'].includes(phase) ? done / total * 100 : null,
+    detail: counted ? `${done} of ${total} sections read in this recording` : steps[phase] }
 }
 
 export function tunerStatus(report, live = false, choiceLive = false, error = "", reportFresh = live) {

@@ -377,6 +377,9 @@ class OnroadView:
     if pending and (only_widget is None or only_widget == ('cruise_limits' if large else 'speed_limit')) and not driver_camera:
       self._slc_actions(state)
 
+  def _legacy_pip_layer(self, state):
+    return getattr(self, "pip_layer", None) if state.camera_available else getattr(self, "preview_pip_layer", None)
+
   def _large(self, state: OnroadState) -> None:
     width, height = self.projection_viewport or (state.viewport_width, 1080)
     right_shift = width - 1860
@@ -399,9 +402,6 @@ class OnroadView:
         if self.extra_overlays is not None:
           self.extra_overlays(content, state)
       else:
-        pip_layer = getattr(self, "pip_layer", None)
-        if pip_layer is not None and state.camera_available:
-          pip_layer(content, state)
         map_layer = getattr(self, "map_layer", None)
         if map_layer is not None and state.alert.size != AlertSize.FULL:
           map_layer(content, state)
@@ -454,6 +454,8 @@ class OnroadView:
         quick_select(content, state)
       if not ordered and state.alert.size != AlertSize.FULL:
         render_rear_fog(state, "large")
+      if not ordered and (pip_layer := self._legacy_pip_layer(state)) is not None:
+        pip_layer(content, state)
       self.alert.render(content, state.alert)
     finally:
       clip.end_scissor_mode()
@@ -521,10 +523,6 @@ class OnroadView:
         if self.extra_overlays is not None:
           self.extra_overlays(frame, state)
       else:
-        pip_layer = getattr(self, "pip_layer", None)
-        if pip_layer is not None and state.camera_available and not driver_camera and \
-           state.appearance.camera_view != CameraViewChoice.NONE:
-          pip_layer(frame, state)
         self._prepare_compact_fade()
         rl.draw_texture_ex(self._fade, rl.Vector2(0, 0), 0, 1, rl.WHITE)
         if state.alert.size == AlertSize.NONE and not driver_camera:
@@ -550,6 +548,9 @@ class OnroadView:
       direction = (-1 if signals.left_blinker else 1 if signals.right_blinker else 0) if signals else 0
       if not ordered and state.alert.size != AlertSize.FULL:
         render_rear_fog(state, "compact")
+      if not ordered and not driver_camera and state.appearance.camera_view != CameraViewChoice.NONE and \
+         (pip_layer := self._legacy_pip_layer(state)) is not None:
+        pip_layer(frame, state)
       self.alert.render(frame, state.alert, signal_direction=direction)
     finally:
       clip.end_scissor_mode()

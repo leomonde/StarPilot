@@ -230,7 +230,7 @@ for _profile, _geometry in {"large": (112, 70, 165, 294), "compact": (45, 28, 22
 
 ROAD_BASE_WIDTH = 1860
 SIDEBAR_EXTRA = 300
-ANCHOR_SHIFT = {"steering_wheel": 1.0, NAV_CARD_WIDGET: 1.0, NAV_MAP_WIDGET: 1.0,
+ANCHOR_SHIFT = {"steering_wheel": 1.0, "pip_right": 1.0, NAV_CARD_WIDGET: 1.0, NAV_MAP_WIDGET: 1.0,
                 "current_speed": .5, "torque_bar": .5, MODE_WIDGET: .5, CLOCK_WIDGET: .5, WEATHER_WIDGET: .5}
 for _key, _widget_data in PROFILES["large"]["widgets"].items():
   if _key in ANCHOR_SHIFT:
@@ -291,12 +291,12 @@ WIDGET_COLORS = {
 
 # Back-to-front order used when a layout first opts into custom layers.
 DEFAULT_WIDGET_ORDER = {
-  "large": (NAV_MAP_WIDGET, "pip_left", "pip_right", "cruise_limits", "speed_limit_actions", CEM_GAUGE_WIDGET, "current_speed",
+  "large": (NAV_MAP_WIDGET, "cruise_limits", "speed_limit_actions", CEM_GAUGE_WIDGET, "current_speed",
             "steering_wheel", "torque_bar", "following_distance", "driver_monitor", MODE_WIDGET, CLOCK_WIDGET, WEATHER_WIDGET,
-            STOPPED_TIMER_WIDGET, NAV_CARD_WIDGET, JETLINK_WIDGET, "rear_fog"),
-  "compact": ("pip_left", "pip_right", "speed_limit", "max_speed", "steering_wheel", "torque_bar",
+            STOPPED_TIMER_WIDGET, NAV_CARD_WIDGET, JETLINK_WIDGET, "rear_fog", "pip_left", "pip_right"),
+  "compact": ("speed_limit", "max_speed", "steering_wheel", "torque_bar",
               "speed_limit_actions", "driver_monitor", *RAIL_WIDGETS, MODE_WIDGET, CLOCK_WIDGET, WEATHER_WIDGET,
-              STOPPED_TIMER_WIDGET, NAV_CARD_WIDGET, "rear_fog"),
+              STOPPED_TIMER_WIDGET, NAV_CARD_WIDGET, "rear_fog", "pip_left", "pip_right"),
 }
 
 
@@ -528,6 +528,11 @@ def validate_document(value):
     fields.add('showMaxSpeed')
     if type(value['showMaxSpeed']) is not bool:
       raise ValueError('Invalid MAX speed preference')
+  if 'speedDisplayOffset' in value:
+    fields.add('speedDisplayOffset')
+    adjustment = value['speedDisplayOffset']
+    if type(adjustment) not in (int, float) or not math.isfinite(adjustment) or not -5 <= adjustment <= 5:
+      raise ValueError('Invalid speed display adjustment')
   if set(value) != fields:
     raise ValueError("Invalid customization fields")
   palette, layouts = value["palette"], value["layouts"]
@@ -734,6 +739,8 @@ def validate_document(value):
     result['clock24Hour'] = value['clock24Hour']
   if 'showMaxSpeed' in value:
     result['showMaxSpeed'] = value['showMaxSpeed']
+  if 'speedDisplayOffset' in value:
+    result['speedDisplayOffset'] = value['speedDisplayOffset']
   if value['version'] < 10:
     migrate_large_sign_layout(result['layouts']['large'], PROFILES['large']['bounds'], extra_height=sources_extent(result))
   if value['version'] < 8:
