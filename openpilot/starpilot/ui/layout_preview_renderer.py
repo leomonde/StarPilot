@@ -237,7 +237,9 @@ class _Canvas:
         self.view.map_layer = self._render_map
         from openpilot.starpilot.models.jetlink_status import JetlinkStatus
         from openpilot.starpilot.ui.onroad_jetlink import JetlinkStatusWidget
-        cast(JetlinkStatusWidget, self.view.jetlink_status).status = JetlinkStatus('iPhone', 'active', 24.6, 'connected')
+        cast(JetlinkStatusWidget, self.view.jetlink_status).status = JetlinkStatus('iPhone', 'active', 24.6, 'connected', model='Cinque v3')
+        from openpilot.starpilot.ui.network_signal import Signal
+        self.view.network_signal.preview = Signal(2, 4, 'wifi', 'LTE', 'connected', ('iPhone 15',), 'Home Wi-Fi')
       self.monitor = _DriverMonitorArt(profile)
       self.view.driver_monitor_layer = self._render_driver_monitor
       self.view.preview_pip_layer = self._render_preview_pip
@@ -387,7 +389,7 @@ class _Canvas:
           else:
             # General edit shows a representative CEM sample even though its backdrop
             # remains engaged. Driving scenes always use their unmodified state.
-            sample = {'cem_gauge': 'cem_curve', 'speed_limit_actions': 'slc_pending'}.get(key) if general else None
+            sample = 'cem_curve' if general and key == 'cem_gauge' else None
             widget_state = sample_state(sample, state.customization) if sample is not None else state
             if key == "rear_fog":
               from openpilot.starpilot.car.ford.rear_fog import boot_time_ns
