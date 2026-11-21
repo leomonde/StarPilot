@@ -102,6 +102,28 @@ function instance() {
   for (const [name, method] of Object.entries(FlmPage.computed)) Object.defineProperty(vm, name, { get: () => method.call(vm) })
   return vm
 }
+const drivingStatus = instance()
+drivingStatus.receivedAt = 10000
+drivingStatus.report = { ...report(), preference: { ...choice, parked: false } }
+for (const age of [.2, 2.1, .1, 3, .5]) {
+  drivingStatus.now = 10000
+  drivingStatus.report.current.ageSeconds = age
+  assert.equal(drivingStatus.connectionState, 'Driving', 'A late learner report cannot erase fresh vehicle status')
+  assert.equal(drivingStatus.currentApplied, false, 'Driving status does not claim a saved tune or current application')
+}
+drivingStatus.report = { ...value, preference: { ...choice, parked: false } }
+assert.equal(drivingStatus.connectionState, 'Learned tune in use')
+drivingStatus.report.current.ageSeconds = 3
+assert.equal(drivingStatus.connectionState, 'Driving', 'Stale application evidence cannot keep an in-use claim')
+drivingStatus.report.current.ageSeconds = .1
+drivingStatus.report.preference.parked = true
+assert.equal(drivingStatus.connectionState, 'Parked')
+drivingStatus.now = 12100
+assert.equal(drivingStatus.connectionState, 'Waiting for vehicle status', 'Stale vehicle status is never kept as current')
+drivingStatus.now = 10000; drivingStatus.error = 'offline'
+assert.equal(drivingStatus.connectionState, 'Waiting for vehicle status')
+assert.match(FlmPage.template, /connectionState/)
+assert.doesNotMatch(FlmPage.template, /Driving · use not confirmed|State not confirmed/)
 const originalFetch = globalThis.fetch, originalDocument = globalThis.document
 try {
   globalThis.document = { getElementById: () => null, hidden: false, addEventListener() {}, removeEventListener() {} }
@@ -219,5 +241,18 @@ try {
   assert.match(unknown.findingError, /Could not confirm/)
   unknown.canReviewFindings = false;unknown.reviewFinding(idea)
   assert.equal(unknown.findingDraft, null)
+  const pending = accepting()
+  const originalFinding = { ...idea, assessment: 'c'.repeat(64) }
+  pending.review.findings = [originalFinding]
+  pending.reviewFinding(originalFinding)
+  pending.load = async () => { pending.current.details['Offroad assessment hash'] = 'd'.repeat(64);return true }
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options })
+    return { ok: true, json: async () => ({ status: 'saved', parameter: idea.parameter, value: idea.target, learning: 'automatic' }) }
+  }
+  await pending.acceptFinding()
+  assert.equal(calls.length, 3, 'A newly analyzed route must not invalidate an unchanged original finding')
+  assert.equal(JSON.parse(calls[2].options.body).assessment, 'c'.repeat(64))
+  assert.equal(pending.findingError, '')
 } finally { globalThis.fetch = acceptanceFetch }
 console.log('Accept finding survives stale polling, refreshes exact authority, refuses changed/driving/offline data and never retries a write')

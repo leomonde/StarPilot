@@ -15,6 +15,7 @@ V_CRUISE_MIN = 8
 V_CRUISE_MAX = 145
 V_CRUISE_UNSET = 255
 V_CRUISE_INITIAL = 40
+LOW_SPEED_CRUISE_ON_SET = "LowSpeedCruiseOnSet"
 IMPERIAL_INCREMENT = round(CV.MPH_TO_KPH, 1)  # round here to avoid rounding errors incrementing set speed
 
 ButtonEvent = car.CarState.ButtonEvent
@@ -61,6 +62,7 @@ class VCruiseHelper:
   def __init__(self, CP):
     self.CP = CP
     self.intervals = CruiseIntervals()
+    self.low_speed_on_set = False
     self.v_cruise_kph = V_CRUISE_UNSET
     self.v_cruise_cluster_kph = V_CRUISE_UNSET
     self.v_cruise_kph_last = 0
@@ -177,7 +179,6 @@ class VCruiseHelper:
     self.pcm_slc_sample = (float(self.v_cruise_kph), now_ns)
 
   def _update_slc_button_latches(self, CS, enabled, slc_pending: SlcPendingConfirmation | None) -> None:
-    # Ford PCM buttons reach OEM cruise even when a host-side press is consumed.
     for b in CS.buttonEvents:
       button = b.type.raw
       if button not in self.button_timers:
@@ -187,7 +188,6 @@ class VCruiseHelper:
         self.slc_released_suppressed = True
         self.button_timers[button] = 0
       elif (b.pressed and enabled and CS.cruiseState.available and slc_pending is not None and
-            not (self.CP.brand == 'ford' and self.CP.pcmCruise) and
             not (self.CP.pcmCruise and button == ButtonType.accelCruise and
                  (CS.standstill or CS.cruiseState.standstill or not CS.cruiseState.enabled)) and
             button not in self.slc_suppressed_buttons):
@@ -313,7 +313,10 @@ class VCruiseHelper:
       self.apply_slc_target(slc_target_mps, is_metric)
       return True
     else:
-      self.v_cruise_kph = int(round(np.clip(max(CS.vEgo * CV.MS_TO_KPH, validated_initial_cruise_speed(initial_speed)), V_CRUISE_INITIAL, V_CRUISE_MAX)))
+      floor = validated_initial_cruise_speed(initial_speed)
+      if self.low_speed_on_set and math.isfinite(self.CP.minEnableSpeed):
+        floor = max(V_CRUISE_MIN, math.ceil(self.CP.minEnableSpeed * CV.MS_TO_KPH))
+      self.v_cruise_kph = int(round(np.clip(CS.vEgo * CV.MS_TO_KPH, floor, V_CRUISE_MAX)))
 
     self.v_cruise_cluster_kph = self.v_cruise_kph
     return False

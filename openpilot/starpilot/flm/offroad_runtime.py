@@ -71,8 +71,8 @@ def configuration_data(cp, ci, controller, params, *, manual_status):
   if document is not None:
     profile = parse_document(document).get(str(cp.carFingerprint))
     if profile is not None:
-      if profile.flm is not None or profile.geometry is not None and profile.geometry.learning == 'force_off':
-        raise ValueError('Manual or explicitly disabled tuning selected')
+      if profile.active_legacy_flm:
+        raise ValueError('saved_gm_flm_profile_blocks_learning')
       if profile.manual_coordinates is not None:
         from openpilot.starpilot.flm.manual_coordinates import selected_manual
         selected_manual(cp, params)
@@ -331,6 +331,10 @@ def _current_controller(cp, params):
   mode = 'native' if cp.lateralTuning.which() == 'pid' else str(read_selection(params, cp).mode)
   factory = PidControllerFactory(cp, mode) if cp.lateralTuning.which() == 'pid' else SelectedControllerFactory(cp, mode, turn_assist=startup.turn_assist)
   controller, _ = factory.create()
+  from openpilot.starpilot.lateral.gain_runtime import create_gain_owner
+  from openpilot.starpilot.lateral.torque_supported import GM_VEHICLES
+  if str(cp.carFingerprint) not in GM_VEHICLES:
+    create_gain_owner(params, cp, controller)
   ci = interfaces[str(cp.carFingerprint)](cp)
   return ci, controller
 
