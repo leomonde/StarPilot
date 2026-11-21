@@ -45,6 +45,8 @@ from openpilot.starpilot.speed_limits.runtime_settings import (
   PEDAL_OVERRIDE_BYTES, PEDAL_OVERRIDE_CHOICES, PEDAL_OVERRIDE_KEY, SOURCE_PRIORITY_KEYS, WHEEL_OVERRIDE_KEY, PedalOverride,
 )
 from openpilot.starpilot.aol.vehicle import policy_for as aol_policy_for
+from openpilot.starpilot.car.hyundai import software_cruise_settings as hyundai_software_cruise
+from openpilot.starpilot.car.subaru import software_cruise_settings as subaru_software_cruise
 from openpilot.starpilot.feature_capabilities import longitudinal_supported as feature_longitudinal_supported
 from openpilot.starpilot.lateral.torque_settings import DOCUMENT_KEY, LEGACY_KEYS
 from openpilot.starpilot.ui.torque_feature import TorqueFeature
@@ -103,6 +105,7 @@ BOOL_DEFAULTS = {
   "SubaruStopStartOff": False,
   "SubaruSNG": False,
   "SubaruRedneckCruise": False,
+  "RedneckCruise": False,
   "ReverseCruise": False, "ToyotaAutoHold": False, "SNGHack": False, "JeepBrakeHold": False, "VoltSNG": False, "GMAutoHold": False, "VoltOnePedalMode": False,
   "RemapCancelToDistance": False, "LongPitch": True, "DisableOpenpilotLongitudinal": False,
   "SpeedLimitController": False, "ShowSpeedLimits": True,
@@ -401,10 +404,6 @@ class FeatureSettingsOwner:
 
   def _subaru_sng_capability(self):
     from openpilot.starpilot.car.subaru.sng_settings import capability
-    return capability(self)
-
-  def _subaru_software_capability(self):
-    from openpilot.starpilot.car.subaru.software_cruise_settings import capability
     return capability(self)
 
   def _gm_stop_capability(self, key: str) -> tuple | None:
@@ -906,13 +905,16 @@ class FeatureSettingsOwner:
               FeatureRow("", "Speed Limit Controller", "Choose speed-limit sources, offsets, and confirmation behavior", page=FeaturePage.SLC, available=True),
               FeatureRow("", "Long Planner", "Tune acceleration, braking, and following distances", page=FeaturePage.PROFILES, available=True),
               FeatureRow("", "Driving Modes", "Choose Automatic, Chill or Experimental", page=FeaturePage.CONDITIONAL, available=True),
+              FeatureRow("", "Developer Parameters", "Advanced acceleration and braking parameters",
+                         page=FeaturePage.DEVELOPER_LONGITUDINAL, available=True),
               FeatureRow("", "Wheel Controls", "Assign steering-wheel buttons and cruise behavior", page=FeaturePage.WHEEL, available=True)]
       if (self._long_pitch_capability() is not None or self._bolt_disable_capability() is not None or
           self._auto_hold_capability() is not None or self._toyota_sng_capability() is not None or self._jeep_hold_capability() is not None or
           self._pedal_setup_capability() is not None or
           self.subaru_smoothing.capability() is not None or
           self._subaru_avh_capability() is not None or self._subaru_startup_capability() is not None or self._subaru_sng_capability() is not None or
-          self._subaru_software_capability() is not None or self._gm_stop_capability("VoltSNG") is not None or
+          hyundai_software_cruise.capability(self) is not None or subaru_software_cruise.capability(self) is not None or
+          self._gm_stop_capability("VoltSNG") is not None or
           self._gm_stop_capability("GMAutoHold") is not None or self.tesla_screen.capability() is not None or self.tesla_coop.capability() is not None or
           self.gm_tune.capability() is not None or self.gm_truck.capability() is not None or
           self.gm_ev_preset.capability() is not None or self.volt_radar.capability() is not None or
@@ -1007,11 +1009,8 @@ class FeatureSettingsOwner:
         row = self._bool_row("SubaruSNG", "Stop-and-Go Assistance", parked and self.authority("parked_preferences"),
                              "Assists lead departure and standstill hold with factory ACC. Applies after the next startup.")
         rows.append(replace(row, available=row.available and self._readable("SubaruSNG"), capability=subaru_sng_capability))
-      software_capability = self._subaru_software_capability()
-      if software_capability is not None:
-        row = self._bool_row("SubaruRedneckCruise", "Software Cruise Control", parked and self.authority("parked_preferences"),
-                             "Adjust stock cruise speed using Resume and Set. Applies after the next startup; factory ACC keeps pedal control.")
-        rows.append(replace(row, available=row.available and self._readable("SubaruRedneckCruise"), capability=software_capability))
+      rows.extend(hyundai_software_cruise.rows(self, parked))
+      rows.extend(subaru_software_cruise.rows(self, parked))
       sng_capability = self._gm_stop_capability("VoltSNG")
       if sng_capability is not None:
         row = self._bool_row("VoltSNG", "Volt Stop-and-Go Assistance", parked and self.authority("parked_preferences"),
@@ -1123,6 +1122,10 @@ class FeatureSettingsOwner:
       learning_row = self.controller.learning_row()
       if learning_row is not None:
         rows.append(learning_row)
+    elif page == FeaturePage.DEVELOPER_LONGITUDINAL:
+      from openpilot.starpilot.ui.longitudinal_developer import rows as longitudinal_developer_rows
+      title = "Developer Parameters"
+      rows.extend(longitudinal_developer_rows(self))
     elif page == FeaturePage.DEVELOPER_LATERAL:
       title = 'Developer Parameters'
       capability = self._capability("torque") or self._capability("gain")
@@ -1180,13 +1183,16 @@ class FeatureSettingsOwner:
         rows.extend(self._cruise_rows(configurable))
       rows.extend(self.wheel.rows())
     elif page == FeaturePage.SLC:
-      system_long = (system_long if self.vehicle_params() is None else self.longitudinal_available()) and self.authority("slc")
+      from opendbc.car.hyundai.software_cruise import selected as button_cruise_selected
+      cp = self.vehicle_params()
+      slc_available = system_long if cp is None else self.longitudinal_available() or button_cruise_selected(cp)
+      system_long = slc_available and self.authority("slc")
       allowed = configurable and system_long
       offsets_ready, offset_rows = self.slc_offsets.rows(allowed, repair_allowed=parked and allowed)
       control, _, _ = self._value("SpeedLimitController")
       if self.vehicle_params() is None:
         control_reason = "Select or connect a vehicle to configure speed control"
-      elif not self.longitudinal_available():
+      elif not slc_available:
         control_reason = "StarPilot speed control is unavailable; check the vehicle and longitudinal settings"
       elif not self.authority("slc"):
         control_reason = "Vehicle settings context is unavailable; refresh this page"
@@ -1515,9 +1521,10 @@ class FeatureSettingsOwner:
     if key == "SubaruSNG":
       from openpilot.starpilot.car.subaru.sng_settings import apply
       return apply(self, request)
+    if key == "RedneckCruise":
+      return hyundai_software_cruise.apply(self, request)
     if key == "SubaruRedneckCruise":
-      from openpilot.starpilot.car.subaru.software_cruise_settings import apply
-      return apply(self, request)
+      return subaru_software_cruise.apply(self, request)
     if key in ("VoltSNG", "GMAutoHold", "VoltOnePedalMode"):
       return self._apply_gm_stop(request)
     if key == "LongPitch":
@@ -1562,6 +1569,9 @@ class FeatureSettingsOwner:
       return self.traffic_profiles.apply(request)
     if key in TORQUE_CONFIRM_ACTIONS or key.startswith("torque:"):
       return self.torque.apply(request)
+    if key.startswith('longdev:'):
+      from openpilot.starpilot.ui.longitudinal_developer import apply as apply_longitudinal_developer
+      return apply_longitudinal_developer(self, request)
     if key in ('steering_delay', 'steering_delay_reset'):
       from openpilot.starpilot.ui.delay_feature import DelayFeature
       return DelayFeature(self).apply(request)
